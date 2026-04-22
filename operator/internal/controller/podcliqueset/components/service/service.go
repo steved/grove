@@ -136,21 +136,28 @@ func (r _resource) doCreateOrUpdate(ctx context.Context, logger logr.Logger, pcs
 // buildResource configures a headless Service for a PCS replica.
 func (r _resource) buildResource(svc *corev1.Service, pcs *grovecorev1alpha1.PodCliqueSet, pcsReplicaIndex int) error {
 	svc.Labels = getLabels(pcs.Name, client.ObjectKeyFromObject(svc), pcsReplicaIndex)
-	var publishNotReadyAddresses bool
-	if pcs.Spec.Template.HeadlessServiceConfig != nil {
-		publishNotReadyAddresses = pcs.Spec.Template.HeadlessServiceConfig.PublishNotReadyAddresses
+
+	var (
+		publishNotReadyAddresses bool
+		ports                    []corev1.ServicePort
+	)
+
+	if config := pcs.Spec.Template.HeadlessServiceConfig; config != nil {
+		publishNotReadyAddresses = config.PublishNotReadyAddresses
+		ports = make([]corev1.ServicePort, len(config.Ports))
+		for i, port := range config.Ports {
+			ports[i] = port.ServicePort
+		}
 	}
+
 	svc.Spec = corev1.ServiceSpec{
 		Selector:                 getLabelSelectorForPodsInAPodCliqueSetReplica(pcs.Name, pcsReplicaIndex),
 		ClusterIP:                "None",
 		PublishNotReadyAddresses: publishNotReadyAddresses,
+		Ports:                    ports,
 	}
 
-	if err := controllerutil.SetControllerReference(pcs, svc, r.scheme); err != nil {
-		return err
-	}
-
-	return nil
+	return controllerutil.SetControllerReference(pcs, svc, r.scheme)
 }
 
 // getLabels constructs labels for a headless Service resource.

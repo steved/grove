@@ -17,6 +17,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -416,6 +417,15 @@ type HeadlessServiceConfig struct {
 	//  if not set, it defaults to true.
 	// +kubebuilder:default=true
 	PublishNotReadyAddresses bool `json:"publishNotReadyAddresses"`
+
+	// Ports configure the ports on the exposed headless service.
+	// +optional
+	Ports []HeadlessServicePort `json:"ports,omitempty"`
+}
+
+// HeadlessServicePort defines a port exposed on the headless service.
+type HeadlessServicePort struct {
+	corev1.ServicePort `json:",inline"`
 }
 
 // UpdateStrategyType defines the type of update strategy for PodCliqueSet.
