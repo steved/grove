@@ -33,6 +33,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
@@ -147,6 +148,35 @@ func (r _resource) buildResource(svc *corev1.Service, pcs *grovecorev1alpha1.Pod
 		ports = make([]corev1.ServicePort, len(config.Ports))
 		for i, port := range config.Ports {
 			ports[i] = port.ServicePort
+		}
+	}
+
+	if len(ports) == 0 { // TODO?
+		containerPorts := make(map[string]corev1.ServicePort)
+		for _, clique := range pcs.Spec.Template.Cliques {
+			for _, container := range clique.Spec.PodSpec.Containers {
+				for _, port := range container.Ports {
+					if port.Name == "" {
+						continue
+					}
+
+					if _, ok := containerPorts[port.Name]; ok {
+						// TODO: warning
+						continue
+					}
+
+					containerPorts[port.Name] = corev1.ServicePort{
+						Name:       port.Name,
+						Protocol:   port.Protocol,
+						Port:       port.ContainerPort,
+						TargetPort: intstr.FromString(port.Name),
+					}
+				}
+			}
+		}
+
+		for _, port := range containerPorts {
+			ports = append(ports, port)
 		}
 	}
 
