@@ -20,12 +20,14 @@ import (
 	"context"
 	"reflect"
 
+	apicommon "github.com/ai-dynamo/grove/operator/api/common"
 	"github.com/ai-dynamo/grove/operator/api/common/constants"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
 	grovectrlutils "github.com/ai-dynamo/grove/operator/internal/controller/utils"
 	"github.com/ai-dynamo/grove/operator/internal/utils"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -61,6 +63,11 @@ func (r *Reconciler) RegisterWithManager(mgr manager.Manager) error {
 			builder.WithPredicates(podCliquePredicate()),
 		).
 		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(mapManagedPodToPodCliqueSet()),
+			builder.WithPredicates(managedPodPlacementPredicate()),
+		).
+		Watches(
 			&grovecorev1alpha1.PodCliqueScalingGroup{},
 			handler.EnqueueRequestsFromMapFunc(mapPodCliqueScaleGroupToPodCliqueSet()),
 			builder.WithPredicates(podCliqueScalingGroupPredicate()),
@@ -77,6 +84,21 @@ func mapPodCliqueToPodCliqueSet() handler.MapFunc {
 		}
 		pcsName := componentutils.GetPodCliqueSetName(pclq.ObjectMeta)
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: pcsName, Namespace: pclq.Namespace}}}
+	}
+}
+
+// mapManagedPodToPodCliqueSet returns a function that maps Grove-managed Pod events to their parent PodCliqueSet.
+func mapManagedPodToPodCliqueSet() handler.MapFunc {
+	return func(_ context.Context, obj client.Object) []reconcile.Request {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok || !isManagedPodCliquePod(pod) {
+			return nil
+		}
+		pcsName := pod.Labels[apicommon.LabelPartOfKey]
+		if pcsName == "" {
+			return nil
+		}
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: pcsName, Namespace: pod.Namespace}}}
 	}
 }
 
@@ -134,6 +156,50 @@ func podCliquePredicate() predicate.Predicate {
 		},
 		GenericFunc: func(_ event.GenericEvent) bool { return false },
 	}
+}
+
+// managedPodPlacementPredicate filters managed Pod events to the placement and readiness changes that can
+// change the ready dependency topology domains used by spread PodCliques.
+func managedPodPlacementPredicate() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(createEvent event.CreateEvent) bool {
+			pod, ok := createEvent.Object.(*corev1.Pod)
+			return ok && isManagedPodCliquePod(pod)
+		},
+		DeleteFunc: func(deleteEvent event.DeleteEvent) bool {
+			pod, ok := deleteEvent.Object.(*corev1.Pod)
+			return ok && isManagedPodCliquePod(pod)
+		},
+		UpdateFunc: func(updateEvent event.UpdateEvent) bool {
+			oldPod, okOld := updateEvent.ObjectOld.(*corev1.Pod)
+			newPod, okNew := updateEvent.ObjectNew.(*corev1.Pod)
+			if !okOld || !okNew || !isManagedPodCliquePod(oldPod) {
+				return false
+			}
+			return oldPod.Spec.NodeName != newPod.Spec.NodeName ||
+				hasPodReadyConditionChanged(oldPod.Status.Conditions, newPod.Status.Conditions) ||
+				(oldPod.DeletionTimestamp == nil && newPod.DeletionTimestamp != nil)
+		},
+		GenericFunc: func(_ event.GenericEvent) bool { return false },
+	}
+}
+
+func isManagedPodCliquePod(pod *corev1.Pod) bool {
+	return grovectrlutils.HasExpectedOwner(constants.KindPodClique, pod.OwnerReferences) &&
+		grovectrlutils.IsManagedByGrove(pod.Labels)
+}
+
+func hasPodReadyConditionChanged(oldConditions, newConditions []corev1.PodCondition) bool {
+	return isPodReady(oldConditions) != isPodReady(newConditions)
+}
+
+func isPodReady(conditions []corev1.PodCondition) bool {
+	for _, condition := range conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // podCliqueScalingGroupPredicate returns a predicate that filters PCSG events for relevant status changes.

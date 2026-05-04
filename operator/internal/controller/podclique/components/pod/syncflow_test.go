@@ -23,7 +23,10 @@ import (
 	"testing"
 
 	"github.com/ai-dynamo/grove/operator/api/common"
+	commonconstants "github.com/ai-dynamo/grove/operator/api/common/constants"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
+	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
+	"github.com/ai-dynamo/grove/operator/internal/expect"
 
 	groveschedulerv1alpha1 "github.com/ai-dynamo/grove/scheduler/api/core/v1alpha1"
 	"github.com/go-logr/logr"
@@ -32,6 +35,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -429,6 +433,139 @@ func TestIsBasePodGangScheduled(t *testing.T) {
 	}
 }
 
+func TestSpreadActualReplicaAccountingIgnoresPlaceholders(t *testing.T) {
+	pclq := createSpreadActualPodClique("spread-demo-0-cyborg", 4, "fabric-a,fabric-b", 2)
+	sc := &syncContext{
+		pclq:                     pclq,
+		pclqExpectationsStoreKey: "default/spread-demo-0-cyborg",
+		existingPCLQPods: []*corev1.Pod{
+			createSpreadSyncPod("placeholder-0", pclq.Name, "fabric-a", 0, true, true, true, corev1.PodRunning),
+			createSpreadSyncPod("placeholder-1", pclq.Name, "fabric-a", 1, true, true, true, corev1.PodRunning),
+			createSpreadSyncPod("placeholder-2", pclq.Name, "fabric-b", 2, true, true, true, corev1.PodRunning),
+			createSpreadSyncPod("placeholder-3", pclq.Name, "fabric-b", 3, true, true, true, corev1.PodRunning),
+			createSpreadSyncPod("actual-0", pclq.Name, "fabric-a", 0, false, false, false, corev1.PodPending),
+			createSpreadSyncPod("actual-1", pclq.Name, "fabric-a", 1, false, false, false, corev1.PodPending),
+		},
+	}
+	r := &_resource{expectationsStore: expect.NewExpectationsStore()}
+
+	require.Len(t, sc.replicaAccountingPods(), 2)
+	diff := r.syncExpectationsAndComputeDifference(logr.Discard(), sc)
+	require.Equal(t, -2, diff)
+}
+
+func TestSpreadActualReplicaAccountingIgnoresStaleDomains(t *testing.T) {
+	pclq := createSpreadActualPodClique("spread-demo-0-cyborg", 4, "fabric-b,fabric-c", 2)
+	sc := &syncContext{
+		pclq:                     pclq,
+		pclqExpectationsStoreKey: "default/spread-demo-0-cyborg",
+		existingPCLQPods: []*corev1.Pod{
+			createSpreadSyncPod("stale-0", pclq.Name, "fabric-a", 0, false, true, true, corev1.PodRunning),
+			createSpreadSyncPod("stale-1", pclq.Name, "fabric-a", 1, false, true, true, corev1.PodRunning),
+			createSpreadSyncPod("actual-2", pclq.Name, "fabric-c", 2, false, true, true, corev1.PodRunning),
+			createSpreadSyncPod("actual-3", pclq.Name, "fabric-c", 3, false, true, true, corev1.PodRunning),
+		},
+	}
+	r := &_resource{expectationsStore: expect.NewExpectationsStore()}
+
+	accountingPods := sc.replicaAccountingPods()
+	require.Len(t, accountingPods, 2)
+	require.ElementsMatch(t, []string{"actual-2", "actual-3"}, []string{accountingPods[0].Name, accountingPods[1].Name})
+	diff := r.syncExpectationsAndComputeDifference(logr.Discard(), sc)
+	require.Equal(t, -2, diff)
+}
+
+func TestDeleteSupersededSpreadTopologyPodsAfterActualPodsReady(t *testing.T) {
+	tests := []struct {
+		name                 string
+		actualPodsScheduled  bool
+		actualPodsReady      bool
+		actualPodPhase       corev1.PodPhase
+		expectSupersededGone bool
+		expectRequeue        bool
+	}{
+		{
+			name:                 "deletes placeholders once actual pods are scheduled active and ready",
+			actualPodsScheduled:  true,
+			actualPodsReady:      true,
+			actualPodPhase:       corev1.PodRunning,
+			expectSupersededGone: true,
+			expectRequeue:        true,
+		},
+		{
+			name:                "keeps placeholders until actual pods are scheduled",
+			actualPodsScheduled: false,
+			actualPodsReady:     true,
+			actualPodPhase:      corev1.PodRunning,
+		},
+		{
+			name:                "keeps placeholders until actual pods are ready",
+			actualPodsScheduled: true,
+			actualPodsReady:     false,
+			actualPodPhase:      corev1.PodRunning,
+		},
+		{
+			name:                "keeps placeholders when actual pods are not active",
+			actualPodsScheduled: true,
+			actualPodsReady:     true,
+			actualPodPhase:      corev1.PodFailed,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pclq := createSpreadActualPodClique("spread-demo-0-cyborg", 4, "fabric-a,fabric-c", 2)
+			placeholder0 := createSpreadSyncPod("placeholder-0", pclq.Name, "fabric-a", 0, true, true, true, corev1.PodRunning)
+			placeholder1 := createSpreadSyncPod("placeholder-1", pclq.Name, "fabric-c", 2, true, true, true, corev1.PodRunning)
+			staleActual := createSpreadSyncPod("stale-actual", pclq.Name, "fabric-b", 0, false, true, true, corev1.PodRunning)
+			actual0 := createSpreadSyncPod("actual-0", pclq.Name, "fabric-a", 0, false, tt.actualPodsScheduled, tt.actualPodsReady, tt.actualPodPhase)
+			actual1 := createSpreadSyncPod("actual-1", pclq.Name, "fabric-a", 1, false, tt.actualPodsScheduled, tt.actualPodsReady, tt.actualPodPhase)
+			actual2 := createSpreadSyncPod("actual-2", pclq.Name, "fabric-c", 2, false, tt.actualPodsScheduled, tt.actualPodsReady, tt.actualPodPhase)
+			actual3 := createSpreadSyncPod("actual-3", pclq.Name, "fabric-c", 3, false, tt.actualPodsScheduled, tt.actualPodsReady, tt.actualPodPhase)
+
+			scheme := runtime.NewScheme()
+			require.NoError(t, corev1.AddToScheme(scheme))
+			require.NoError(t, grovecorev1alpha1.AddToScheme(scheme))
+			fakeClient := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithObjects(placeholder0, placeholder1, staleActual, actual0, actual1, actual2, actual3).
+				Build()
+			r := &_resource{
+				client:            fakeClient,
+				expectationsStore: expect.NewExpectationsStore(),
+				eventRecorder:     record.NewFakeRecorder(10),
+			}
+			sc := &syncContext{
+				ctx:                      context.Background(),
+				pclq:                     pclq,
+				pclqExpectationsStoreKey: "default/spread-demo-0-cyborg",
+				existingPCLQPods:         []*corev1.Pod{placeholder0, placeholder1, staleActual, actual0, actual1, actual2, actual3},
+			}
+
+			err := r.deleteSupersededSpreadTopologyPodsAfterActualPodsReady(sc, logr.Discard())
+			if tt.expectRequeue {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+
+			remainingPods := &corev1.PodList{}
+			require.NoError(t, fakeClient.List(context.Background(), remainingPods, client.InNamespace("default")))
+			supersededCount := 0
+			for _, pod := range remainingPods.Items {
+				if isSupersededSpreadTopologyPod(pclq, &pod) {
+					supersededCount++
+				}
+			}
+			if tt.expectSupersededGone {
+				require.Zero(t, supersededCount)
+			} else {
+				require.Equal(t, 3, supersededCount)
+			}
+		})
+	}
+}
+
 // Test helper types and functions
 
 type testPodClique struct {
@@ -561,4 +698,56 @@ func createTestPodClique(name string, minAvailable, scheduledReplicas int32) *gr
 			ScheduledReplicas: scheduledReplicas,
 		},
 	}
+}
+
+func createSpreadActualPodClique(name string, replicas int32, activeDomains string, replicasPerDomain int32) *grovecorev1alpha1.PodClique {
+	return &grovecorev1alpha1.PodClique{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Annotations: map[string]string{
+				commonconstants.AnnotationTopologySpreadPhase:             componentutils.TopologySpreadPhaseActual,
+				commonconstants.AnnotationTopologySpreadActiveDomains:     activeDomains,
+				commonconstants.AnnotationTopologySpreadReplicasPerDomain: fmt.Sprintf("%d", replicasPerDomain),
+			},
+		},
+		Spec: grovecorev1alpha1.PodCliqueSpec{
+			Replicas: replicas,
+		},
+	}
+}
+
+func createSpreadSyncPod(name, pclqName, domain string, podIndex int, placeholder, scheduled, ready bool, phase corev1.PodPhase) *corev1.Pod {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "default",
+			Labels: map[string]string{
+				common.LabelPodClique:                 pclqName,
+				common.LabelPodCliquePodIndex:         fmt.Sprintf("%d", podIndex),
+				common.LabelTopologySpreadPlaceholder: fmt.Sprintf("%t", placeholder),
+				common.LabelTopologySpreadDomain:      domain,
+			},
+		},
+		Spec: corev1.PodSpec{
+			Hostname: fmt.Sprintf("%s-%d", pclqName, podIndex),
+		},
+		Status: corev1.PodStatus{
+			Phase: phase,
+		},
+	}
+	if scheduled {
+		pod.Spec.NodeName = "node-a"
+		pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
+			Type:   corev1.PodScheduled,
+			Status: corev1.ConditionTrue,
+		})
+	}
+	if ready {
+		pod.Status.Conditions = append(pod.Status.Conditions, corev1.PodCondition{
+			Type:   corev1.PodReady,
+			Status: corev1.ConditionTrue,
+		})
+	}
+	return pod
 }

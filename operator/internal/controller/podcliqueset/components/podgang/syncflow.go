@@ -338,9 +338,11 @@ func buildPodCliqueInfo(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.Pod
 	expectedPCLQ := pclqInfo{
 		fqn:          pclqFQN,
 		replicas:     replicas,
-		minAvailable: *pclqTemplateSpec.Spec.MinAvailable,
+		minAvailable: determinePodCliqueMinAvailable(sc, pclqTemplateSpec, pclqFQN),
 	}
-	expectedPCLQ.topologyConstraint = createTopologyPackConstraint(sc, types.NamespacedName{Namespace: sc.pcs.Namespace, Name: pclqFQN}, pclqTemplateSpec.TopologyConstraint)
+	if !componentutils.IsSpreadPodCliqueTemplate(pclqTemplateSpec) {
+		expectedPCLQ.topologyConstraint = createTopologyPackConstraint(sc, types.NamespacedName{Namespace: sc.pcs.Namespace, Name: pclqFQN}, pclqTemplateSpec.TopologyConstraint)
+	}
 	return expectedPCLQ
 }
 
@@ -372,12 +374,15 @@ func createTopologyPackConstraint(sc *syncContext, nsName types.NamespacedName, 
 
 // determinePodCliqueReplicas determines replica count considering HPA mutations.
 func determinePodCliqueReplicas(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec, pclqFQN string, belongsToPCSG bool) int32 {
+	if componentutils.IsSpreadPodCliqueTemplate(pclqTemplateSpec) {
+		if matchingPCLQ, found := findExistingPCLQ(sc, pclqFQN); found {
+			return matchingPCLQ.Spec.Replicas
+		}
+	}
 	if belongsToPCSG || pclqTemplateSpec.Spec.ScaleConfig == nil {
 		return pclqTemplateSpec.Spec.Replicas
 	}
-	matchingPCLQ, found := lo.Find(sc.existingPCLQs, func(pclq grovecorev1alpha1.PodClique) bool {
-		return pclqFQN == pclq.Name
-	})
+	matchingPCLQ, found := findExistingPCLQ(sc, pclqFQN)
 	if !found {
 		// PodClique resource not found - might be during initial creation
 		// Fall back to template replicas but log warning for visibility
@@ -387,6 +392,21 @@ func determinePodCliqueReplicas(sc *syncContext, pclqTemplateSpec *grovecorev1al
 		return pclqTemplateSpec.Spec.Replicas
 	}
 	return matchingPCLQ.Spec.Replicas
+}
+
+func determinePodCliqueMinAvailable(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec, pclqFQN string) int32 {
+	if componentutils.IsSpreadPodCliqueTemplate(pclqTemplateSpec) {
+		if matchingPCLQ, found := findExistingPCLQ(sc, pclqFQN); found && matchingPCLQ.Spec.MinAvailable != nil {
+			return *matchingPCLQ.Spec.MinAvailable
+		}
+	}
+	return *pclqTemplateSpec.Spec.MinAvailable
+}
+
+func findExistingPCLQ(sc *syncContext, pclqFQN string) (grovecorev1alpha1.PodClique, bool) {
+	return lo.Find(sc.existingPCLQs, func(pclq grovecorev1alpha1.PodClique) bool {
+		return pclqFQN == pclq.Name
+	})
 }
 
 // getExistingPCSGsForPCS fetches all existing PCSGs for the PodCliqueSet.
@@ -572,7 +592,7 @@ func (r _resource) getPodsPendingCreationOrAssociation(sc *syncContext, podGang 
 	var numPodsPendingCreateOrAssociate int
 	pclqs := sc.getPodCliques(podGang)
 	for _, pclq := range pclqs {
-		existingPCLQPods := sc.existingPCLQPods[pclq.Name]
+		existingPCLQPods := sc.podsForPodGangAccounting(pclq, sc.existingPCLQPods[pclq.Name])
 		// If there is a difference between the expected replicas and the existing pods, we need to account for that.
 		// If the difference is positive, it means there are pending pods to create.
 		// If the difference is negative, it means there are more existing pods than expected. In this case, we do not need to create any new pods, therefore we can ignore the negative difference.
@@ -683,7 +703,7 @@ func (sc *syncContext) isPodGangInitialized(podGangName string) bool {
 // initializeAssignedAndUnassignedPodsForPCS categorizes pods by PodGang assignment.
 func (sc *syncContext) initializeAssignedAndUnassignedPodsForPCS() {
 	for pclqName, pods := range sc.existingPCLQPods {
-		for _, pod := range pods {
+		for _, pod := range sc.podsForPodGangAccountingByName(pclqName, pods) {
 			if metav1.HasLabel(pod.ObjectMeta, apicommon.LabelPodGang) {
 				podGangName := pod.GetLabels()[apicommon.LabelPodGang]
 				// Find the index to work with the original slice element, not a copy
@@ -700,6 +720,25 @@ func (sc *syncContext) initializeAssignedAndUnassignedPodsForPCS() {
 			}
 		}
 	}
+}
+
+func (sc *syncContext) podsForPodGangAccountingByName(pclqName string, pods []corev1.Pod) []corev1.Pod {
+	pclq, found := lo.Find(sc.existingPCLQs, func(pclq grovecorev1alpha1.PodClique) bool {
+		return pclq.Name == pclqName
+	})
+	if !found {
+		return pods
+	}
+	return sc.podsForPodGangAccounting(pclq, pods)
+}
+
+func (sc *syncContext) podsForPodGangAccounting(pclq grovecorev1alpha1.PodClique, pods []corev1.Pod) []corev1.Pod {
+	if componentutils.GetTopologySpreadPhase(pclq.Annotations) != componentutils.TopologySpreadPhaseActual {
+		return pods
+	}
+	return lo.Filter(pods, func(pod corev1.Pod, _ int) bool {
+		return componentutils.IsTopologySpreadPodInDesiredActualSlot(&pclq, &pod)
+	})
 }
 
 // getPodCliques retrieves PodClique resources for a PodGang.

@@ -161,6 +161,13 @@ func (r _resource) buildResource(pcs *grovecorev1alpha1.PodCliqueSet, pclq *grov
 		)
 	}
 	pod.Spec = *pclq.Spec.PodSpec.DeepCopy()
+	if err = configureSpreadTopologyPod(pclq.Annotations, pclq.Name, pod, podIndex); err != nil {
+		return groveerr.WrapError(err,
+			errCodeBuildPodResource,
+			component.OperationSync,
+			fmt.Sprintf("failed to configure spread topology for PodClique %v", client.ObjectKeyFromObject(pclq)),
+		)
+	}
 	pod.Spec.SchedulingGates = []corev1.PodSchedulingGate{{Name: podGangSchedulingGate}}
 
 	// Resolve scheduler: from template or default backend; then prepare pod (schedulerName, annotations, etc.)
@@ -185,10 +192,14 @@ func (r _resource) buildResource(pcs *grovecorev1alpha1.PodCliqueSet, pclq *grov
 		return err
 	}
 	// If there is a need to enforce a Startup-Order then configure the init container and add it to the Pod Spec.
-	if len(pclq.Spec.StartsAfter) != 0 {
+	if shouldConfigurePodInitContainer(pclq) {
 		return configurePodInitContainer(pcs, pclq, pod)
 	}
 	return nil
+}
+
+func shouldConfigurePodInitContainer(pclq *grovecorev1alpha1.PodClique) bool {
+	return len(pclq.Spec.StartsAfter) != 0 && !componentutils.IsTopologySpreadPodClique(pclq)
 }
 
 // injectAllResourceClaimRefs is the single consolidated injection point for all

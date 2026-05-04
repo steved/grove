@@ -45,6 +45,18 @@ const (
 	AnnotationDisableManagedResourceProtection = "grove.io/disable-managed-resource-protection"
 	// AnnotationTopologyName is an annotation set on PodGang to allow KAI scheduler to discover which topology to use.
 	AnnotationTopologyName = "grove.io/topology-name"
+	// AnnotationTopologySpreadPhase stores the current spread topology phase for a PodClique.
+	AnnotationTopologySpreadPhase = "grove.io/topology-spread-phase"
+	// AnnotationTopologySpreadTopologyKey stores the node label key backing a spread topology domain.
+	AnnotationTopologySpreadTopologyKey = "grove.io/topology-spread-topology-key"
+	// AnnotationTopologySpreadAllDomains stores all discovered topology domain values for placeholder Pods.
+	AnnotationTopologySpreadAllDomains = "grove.io/topology-spread-all-domains"
+	// AnnotationTopologySpreadActiveDomains stores topology domains selected by ready startup dependency Pods.
+	AnnotationTopologySpreadActiveDomains = "grove.io/topology-spread-active-domains"
+	// AnnotationTopologySpreadReplicasPerDomain stores the template replica count used per selected topology domain.
+	AnnotationTopologySpreadReplicasPerDomain = "grove.io/topology-spread-replicas-per-domain"
+	// AnnotationTopologySpreadMinAvailablePerDomain stores the template minAvailable count used per selected topology domain.
+	AnnotationTopologySpreadMinAvailablePerDomain = "grove.io/topology-spread-min-available-per-domain"
 )
 
 // Constants for Grove environment variables

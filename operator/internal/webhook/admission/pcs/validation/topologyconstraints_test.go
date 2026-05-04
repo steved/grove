@@ -27,6 +27,7 @@ import (
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/validation/field"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -603,6 +604,122 @@ func TestValidateUpdateTopologyConstraintImmutability(t *testing.T) {
 			newPCS := buildTestPCS(tc.newPCSConstraint, tc.newCliques, tc.newPCSGConfigs)
 			validator := newTopologyConstraintsValidator(newPCS, true, clusterDomains)
 			errs := validator.validateUpdate(oldPCS)
+			assert.Len(t, errs, len(tc.errorMatchers), "unexpected number of errors")
+			testutils.AssertErrorMatches(t, errs, tc.errorMatchers)
+		})
+	}
+}
+
+func TestValidateSpreadTopologyConstraints(t *testing.T) {
+	clusterDomains := []string{
+		string(grovecorev1alpha1.TopologyDomainBlock),
+		string(grovecorev1alpha1.TopologyDomainHost),
+	}
+	spreadConstraint := &grovecorev1alpha1.TopologyConstraint{
+		PackDomain: grovecorev1alpha1.TopologyDomainBlock,
+		Spread:     true,
+	}
+	explicitStartup := ptr.To(grovecorev1alpha1.CliqueStartupTypeExplicit)
+	anyOrderStartup := ptr.To(grovecorev1alpha1.CliqueStartupTypeAnyOrder)
+
+	tests := []struct {
+		name          string
+		setupPCS      func() *grovecorev1alpha1.PodCliqueSet
+		errorMatchers []testutils.ErrorMatcher
+	}{
+		{
+			name: "allows standalone explicit dependency spread clique",
+			setupPCS: func() *grovecorev1alpha1.PodCliqueSet {
+				pcs := buildTestPCS(nil, []*grovecorev1alpha1.PodCliqueTemplateSpec{
+					{Name: "lpu", Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 1, MinAvailable: ptr.To[int32](1), RoleName: "lpu-role"}},
+					{Name: "cyborg", TopologyConstraint: spreadConstraint, Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 2, MinAvailable: ptr.To[int32](1), RoleName: "cyborg-role", StartsAfter: []string{"lpu"}}},
+				}, nil)
+				pcs.Spec.Template.StartupType = explicitStartup
+				return pcs
+			},
+		},
+		{
+			name: "forbids spread on top-level topology constraint",
+			setupPCS: func() *grovecorev1alpha1.PodCliqueSet {
+				pcs := buildTestPCS(spreadConstraint, nil, nil)
+				pcs.Spec.Template.StartupType = explicitStartup
+				return pcs
+			},
+			errorMatchers: []testutils.ErrorMatcher{
+				{ErrorType: field.ErrorTypeForbidden, Field: "spec.template.topologyConstraint.spread"},
+			},
+		},
+		{
+			name: "requires explicit startup",
+			setupPCS: func() *grovecorev1alpha1.PodCliqueSet {
+				pcs := buildTestPCS(nil, []*grovecorev1alpha1.PodCliqueTemplateSpec{
+					{Name: "lpu", Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 1, MinAvailable: ptr.To[int32](1), RoleName: "lpu-role"}},
+					{Name: "cyborg", TopologyConstraint: spreadConstraint, Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 2, MinAvailable: ptr.To[int32](1), RoleName: "cyborg-role", StartsAfter: []string{"lpu"}}},
+				}, nil)
+				pcs.Spec.Template.StartupType = anyOrderStartup
+				return pcs
+			},
+			errorMatchers: []testutils.ErrorMatcher{
+				{ErrorType: field.ErrorTypeInvalid, Field: "spec.template.cliques[1].topologyConstraint.spread"},
+			},
+		},
+		{
+			name: "requires startsAfter",
+			setupPCS: func() *grovecorev1alpha1.PodCliqueSet {
+				pcs := buildTestPCS(nil, []*grovecorev1alpha1.PodCliqueTemplateSpec{
+					{Name: "cyborg", TopologyConstraint: spreadConstraint, Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 2, MinAvailable: ptr.To[int32](1), RoleName: "cyborg-role"}},
+				}, nil)
+				pcs.Spec.Template.StartupType = explicitStartup
+				return pcs
+			},
+			errorMatchers: []testutils.ErrorMatcher{
+				{ErrorType: field.ErrorTypeInvalid, Field: "spec.template.cliques[0].topologyConstraint.spread"},
+			},
+		},
+		{
+			name: "forbids spread on pcsg topology constraint",
+			setupPCS: func() *grovecorev1alpha1.PodCliqueSet {
+				pcs := buildTestPCS(nil, []*grovecorev1alpha1.PodCliqueTemplateSpec{
+					{Name: "worker", Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 1, MinAvailable: ptr.To[int32](1), RoleName: "worker-role"}},
+				}, []grovecorev1alpha1.PodCliqueScalingGroupConfig{{
+					Name:               "workers",
+					CliqueNames:        []string{"worker"},
+					Replicas:           ptr.To[int32](1),
+					MinAvailable:       ptr.To[int32](1),
+					TopologyConstraint: spreadConstraint,
+				}})
+				pcs.Spec.Template.StartupType = explicitStartup
+				return pcs
+			},
+			errorMatchers: []testutils.ErrorMatcher{
+				{ErrorType: field.ErrorTypeForbidden, Field: "spec.template.podCliqueScalingGroups[0].topologyConstraint.spread"},
+			},
+		},
+		{
+			name: "forbids spread clique inside pcsg",
+			setupPCS: func() *grovecorev1alpha1.PodCliqueSet {
+				pcs := buildTestPCS(nil, []*grovecorev1alpha1.PodCliqueTemplateSpec{
+					{Name: "lpu", Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 1, MinAvailable: ptr.To[int32](1), RoleName: "lpu-role"}},
+					{Name: "cyborg", TopologyConstraint: spreadConstraint, Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 2, MinAvailable: ptr.To[int32](1), RoleName: "cyborg-role", StartsAfter: []string{"lpu"}}},
+				}, []grovecorev1alpha1.PodCliqueScalingGroupConfig{{
+					Name:         "workers",
+					CliqueNames:  []string{"cyborg"},
+					Replicas:     ptr.To[int32](1),
+					MinAvailable: ptr.To[int32](1),
+				}})
+				pcs.Spec.Template.StartupType = explicitStartup
+				return pcs
+			},
+			errorMatchers: []testutils.ErrorMatcher{
+				{ErrorType: field.ErrorTypeForbidden, Field: "spec.template.cliques[1].topologyConstraint.spread"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			validator := newTopologyConstraintsValidator(tc.setupPCS(), true, clusterDomains)
+			errs := validator.validate()
 			assert.Len(t, errs, len(tc.errorMatchers), "unexpected number of errors")
 			testutils.AssertErrorMatches(t, errs, tc.errorMatchers)
 		})

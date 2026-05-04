@@ -123,6 +123,8 @@ deployment:
   env:
     - name: GROVE_INIT_CONTAINER_IMAGE
       value: grove-initc
+    - name: GROVE_SPREAD_PLACEHOLDER_IMAGE
+      value: registry.k8s.io/pause:latest
 
 # This is for setting up a service more information can be found here: https://kubernetes.io/docs/concepts/services-networking/service/
 service:

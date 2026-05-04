@@ -9303,6 +9303,11 @@ spec:
                               minLength: 1
                               pattern: ^[a-z][a-z0-9-]*$
                               type: string
+                            spread:
+                              description: |-
+                                Spread indicates that the PodClique should deploy replicas per topology pack domain used by its startup dependencies.
+                                This is only supported on PodClique topology constraints.
+                              type: boolean
                             topologyName:
                               description: |-
                                 TopologyName is the name of the ClusterTopology resource to use for topology-aware scheduling.
@@ -9961,6 +9966,11 @@ spec:
                               minLength: 1
                               pattern: ^[a-z][a-z0-9-]*$
                               type: string
+                            spread:
+                              description: |-
+                                Spread indicates that the PodClique should deploy replicas per topology pack domain used by its startup dependencies.
+                                This is only supported on PodClique topology constraints.
+                              type: boolean
                             topologyName:
                               description: |-
                                 TopologyName is the name of the ClusterTopology resource to use for topology-aware scheduling.
@@ -10757,6 +10767,11 @@ spec:
                         minLength: 1
                         pattern: ^[a-z][a-z0-9-]*$
                         type: string
+                      spread:
+                        description: |-
+                          Spread indicates that the PodClique should deploy replicas per topology pack domain used by its startup dependencies.
+                          This is only supported on PodClique topology constraints.
+                        type: boolean
                       topologyName:
                         description: |-
                           TopologyName is the name of the ClusterTopology resource to use for topology-aware scheduling.

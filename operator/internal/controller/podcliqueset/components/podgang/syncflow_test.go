@@ -407,6 +407,43 @@ func TestGetPodsPendingCreation(t *testing.T) {
 	}
 }
 
+func TestPodsForPodGangAccountingUsesOnlyDesiredActualSpreadPods(t *testing.T) {
+	sc := &syncContext{
+		existingPCLQs: []grovecorev1alpha1.PodClique{{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "spread-demo-0-cyborg",
+				Annotations: map[string]string{
+					apicommonconstants.AnnotationTopologySpreadPhase:             componentutils.TopologySpreadPhaseActual,
+					apicommonconstants.AnnotationTopologySpreadActiveDomains:     "fabric-a,fabric-c",
+					apicommonconstants.AnnotationTopologySpreadReplicasPerDomain: "2",
+				},
+			},
+		}},
+	}
+	pods := []v1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "placeholder", Labels: map[string]string{
+			apicommon.LabelPodCliquePodIndex:         "0",
+			apicommon.LabelTopologySpreadPlaceholder: "true",
+			apicommon.LabelTopologySpreadDomain:      "fabric-a",
+		}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "stale-actual", Labels: map[string]string{
+			apicommon.LabelPodCliquePodIndex:         "0",
+			apicommon.LabelTopologySpreadPlaceholder: "false",
+			apicommon.LabelTopologySpreadDomain:      "fabric-b",
+		}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "actual", Labels: map[string]string{
+			apicommon.LabelPodCliquePodIndex:         "0",
+			apicommon.LabelTopologySpreadPlaceholder: "false",
+			apicommon.LabelTopologySpreadDomain:      "fabric-a",
+		}}},
+	}
+
+	accountingPods := sc.podsForPodGangAccountingByName("spread-demo-0-cyborg", pods)
+
+	require.Len(t, accountingPods, 1)
+	require.Equal(t, "actual", accountingPods[0].Name)
+}
+
 // TestCreateOrUpdatePodGangs tests the createOrUpdatePodGangs flow.
 func TestCreateOrUpdatePodGangs(t *testing.T) {
 	ns := "default"

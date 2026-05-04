@@ -284,6 +284,10 @@ type TopologyConstraint struct {
 	// Different replicas can be in different topology domains.
 	// +required
 	PackDomain TopologyDomain `json:"packDomain"`
+	// Spread indicates that the PodClique should deploy replicas per topology pack domain used by its startup dependencies.
+	// This is only supported on PodClique topology constraints.
+	// +optional
+	Spread bool `json:"spread,omitempty"`
 }
 
 // PodCliqueScalingGroupConfig is a group of PodClique's that are scaled together.

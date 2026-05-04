@@ -458,7 +458,7 @@ func TestBuildResource_MNNVLInjection(t *testing.T) {
 				eventRecorder: record.NewFakeRecorder(10),
 			}
 
-			err := operator.buildResource(logr.Discard(), pclq, pcs, pcsReplica, false)
+			err := operator.buildResource(context.Background(), logr.Discard(), pclq, pcs, pcsReplica, false)
 			require.NoError(t, err)
 
 			// Verify pod-level claims
@@ -512,7 +512,7 @@ func TestBuildResource_StripsTopologyAnnotation(t *testing.T) {
 	}
 
 	operator := &_resource{scheme: groveclientscheme.Scheme}
-	err := operator.buildResource(logr.Discard(), pclq, pcs, 0, false)
+	err := operator.buildResource(context.Background(), logr.Discard(), pclq, pcs, 0, false)
 	require.NoError(t, err)
 	require.NotNil(t, pclq.Annotations)
 	assert.Equal(t, "yes", pclq.Annotations["example.com/keep"])

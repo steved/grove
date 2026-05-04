@@ -58,10 +58,7 @@ func (r *Reconciler) RegisterWithManager(mgr ctrl.Manager) error {
 		}).
 		For(&grovecorev1alpha1.PodClique{},
 			builder.WithPredicates(
-				predicate.And(
-					predicate.GenerationChangedPredicate{},
-					managedPodCliquePredicate(),
-				),
+				managedPodCliqueSpecOrSpreadPlacementPredicate(),
 			),
 		).
 		Owns(&corev1.Pod{}, builder.WithPredicates(r.podPredicate())).
@@ -83,8 +80,9 @@ func (r *Reconciler) RegisterWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// managedPodCliquePredicate filters PodClique events to only process managed PodCliques owned by expected resources
-func managedPodCliquePredicate() predicate.Predicate {
+// managedPodCliqueSpecOrSpreadPlacementPredicate filters PodClique events to managed PodCliques and also
+// lets annotation-only spread placement updates wake the PodClique reconciler.
+func managedPodCliqueSpecOrSpreadPlacementPredicate() predicate.Predicate {
 	expectedOwnerKinds := []string{constants.KindPodCliqueScalingGroup, constants.KindPodCliqueSet}
 	return predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
@@ -94,10 +92,28 @@ func managedPodCliquePredicate() predicate.Predicate {
 			return grovectrlutils.IsManagedPodClique(e.Object, expectedOwnerKinds...)
 		},
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return grovectrlutils.IsManagedPodClique(e.ObjectOld, expectedOwnerKinds...)
+			return grovectrlutils.IsManagedPodClique(e.ObjectOld, expectedOwnerKinds...) &&
+				(e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() ||
+					hasTopologySpreadPlacementAnnotationsChanged(e.ObjectOld.GetAnnotations(), e.ObjectNew.GetAnnotations()))
 		},
 		GenericFunc: func(_ event.GenericEvent) bool { return false },
 	}
+}
+
+func hasTopologySpreadPlacementAnnotationsChanged(oldAnnotations, newAnnotations map[string]string) bool {
+	for _, annotationKey := range []string{
+		constants.AnnotationTopologySpreadPhase,
+		constants.AnnotationTopologySpreadTopologyKey,
+		constants.AnnotationTopologySpreadAllDomains,
+		constants.AnnotationTopologySpreadActiveDomains,
+		constants.AnnotationTopologySpreadReplicasPerDomain,
+		constants.AnnotationTopologySpreadMinAvailablePerDomain,
+	} {
+		if oldAnnotations[annotationKey] != newAnnotations[annotationKey] {
+			return true
+		}
+	}
+	return false
 }
 
 // podPredicate returns a predicate that filters out pods that are not managed by Grove.

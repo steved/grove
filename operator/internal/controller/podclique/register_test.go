@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/ai-dynamo/grove/operator/api/common"
+	commonconstants "github.com/ai-dynamo/grove/operator/api/common/constants"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/internal/expect"
 	testutils "github.com/ai-dynamo/grove/operator/test/utils"
@@ -75,6 +76,38 @@ func TestPodPredicate_Delete(t *testing.T) {
 			"ObserveDeletions should remove the deleted pod UID from uidsToAdd so next reconcile can recreate the pod")
 		assert.True(t, result, "predicate should allow the event so the handler enqueues reconcile")
 	})
+}
+
+func TestManagedPodCliqueSpecOrSpreadPlacementPredicate_UpdateOnSpreadAnnotations(t *testing.T) {
+	oldPCLQ := &grovecorev1alpha1.PodClique{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "spread-demo-0-cyborg",
+			Namespace: "default",
+			Labels: map[string]string{
+				common.LabelManagedByKey: common.LabelManagedByValue,
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind: commonconstants.KindPodCliqueSet,
+				Name: "spread-demo",
+			}},
+			Annotations: map[string]string{
+				commonconstants.AnnotationTopologySpreadPhase:             "actual",
+				commonconstants.AnnotationTopologySpreadActiveDomains:     "fabric-a,fabric-c",
+				commonconstants.AnnotationTopologySpreadReplicasPerDomain: "2",
+			},
+		},
+	}
+	newPCLQ := oldPCLQ.DeepCopy()
+	newPCLQ.Annotations[commonconstants.AnnotationTopologySpreadActiveDomains] = "fabric-b,fabric-c"
+
+	pred, ok := managedPodCliqueSpecOrSpreadPlacementPredicate().(predicate.Funcs)
+	require.True(t, ok)
+
+	assert.True(t, pred.UpdateFunc(event.UpdateEvent{ObjectOld: oldPCLQ, ObjectNew: newPCLQ}))
+
+	metadataOnlyPCLQ := oldPCLQ.DeepCopy()
+	metadataOnlyPCLQ.Annotations["example.com/ignored"] = "changed"
+	assert.False(t, pred.UpdateFunc(event.UpdateEvent{ObjectOld: oldPCLQ, ObjectNew: metadataOnlyPCLQ}))
 }
 
 // Test_isMarkedForDeletion tests if a deletion timestamp is set on the pod

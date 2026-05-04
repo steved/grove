@@ -23,6 +23,7 @@ import (
 	"github.com/ai-dynamo/grove/operator/api/common"
 	"github.com/ai-dynamo/grove/operator/api/common/constants"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
+	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
 
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -444,6 +445,60 @@ func TestAddGroveEnvironmentVariables_MultipleContainers(t *testing.T) {
 		envVarNames[env.Name] = true
 	}
 	assert.True(t, envVarNames["EXISTING_VAR"], "existing environment variable should be preserved")
+}
+
+func TestShouldConfigurePodInitContainer(t *testing.T) {
+	tests := []struct {
+		name     string
+		pclq     *grovecorev1alpha1.PodClique
+		expected bool
+	}{
+		{
+			name: "PodClique without startup dependencies does not get init container",
+			pclq: &grovecorev1alpha1.PodClique{},
+		},
+		{
+			name: "non-spread PodClique with startup dependencies gets init container",
+			pclq: &grovecorev1alpha1.PodClique{
+				Spec: grovecorev1alpha1.PodCliqueSpec{
+					StartsAfter: []string{"pcs-0-lpu"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "spread placeholder PodClique with startup dependencies skips init container",
+			pclq: &grovecorev1alpha1.PodClique{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						constants.AnnotationTopologySpreadPhase: componentutils.TopologySpreadPhasePlaceholder,
+					},
+				},
+				Spec: grovecorev1alpha1.PodCliqueSpec{
+					StartsAfter: []string{"pcs-0-lpu"},
+				},
+			},
+		},
+		{
+			name: "spread actual PodClique with startup dependencies skips init container",
+			pclq: &grovecorev1alpha1.PodClique{
+				ObjectMeta: metav1.ObjectMeta{
+					Annotations: map[string]string{
+						constants.AnnotationTopologySpreadPhase: componentutils.TopologySpreadPhaseActual,
+					},
+				},
+				Spec: grovecorev1alpha1.PodCliqueSpec{
+					StartsAfter: []string{"pcs-0-lpu"},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, shouldConfigurePodInitContainer(tt.pclq))
+		})
+	}
 }
 
 // Helper functions

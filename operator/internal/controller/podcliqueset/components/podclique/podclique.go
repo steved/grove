@@ -266,7 +266,7 @@ func (r _resource) doCreateOrUpdate(ctx context.Context, logger logr.Logger, pcs
 	pcsObjKey := client.ObjectKeyFromObject(pcs)
 
 	opResult, err := controllerutil.CreateOrPatch(ctx, r.client, pclq, func() error {
-		return r.buildResource(logger, pclq, pcs, int(pcsReplica), pclqExists)
+		return r.buildResource(ctx, logger, pclq, pcs, int(pcsReplica), pclqExists)
 	})
 	if err != nil {
 		r.eventRecorder.Eventf(pcs, corev1.EventTypeWarning, constants.ReasonPodCliqueCreateOrUpdateFailed, "PodClique %v creation or updation failed: %v", pclqObjectKey, err)
@@ -283,7 +283,7 @@ func (r _resource) doCreateOrUpdate(ctx context.Context, logger logr.Logger, pcs
 }
 
 // buildResource configures a PodClique with the desired state from the template.
-func (r _resource) buildResource(logger logr.Logger, pclq *grovecorev1alpha1.PodClique, pcs *grovecorev1alpha1.PodCliqueSet, pcsReplica int, pclqExists bool) error {
+func (r _resource) buildResource(ctx context.Context, logger logr.Logger, pclq *grovecorev1alpha1.PodClique, pcs *grovecorev1alpha1.PodCliqueSet, pcsReplica int, pclqExists bool) error {
 	var err error
 	pclqObjectKey, pcsObjectKey := client.ObjectKeyFromObject(pclq), client.ObjectKeyFromObject(pcs)
 	pclqTemplateSpec, foundAtIndex, ok := lo.FindIndexOf(pcs.Spec.Template.Cliques, func(pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec) bool {
@@ -325,6 +325,9 @@ func (r _resource) buildResource(logger logr.Logger, pclq *grovecorev1alpha1.Pod
 		return err
 	}
 	pclq.Spec.StartsAfter = dependentPclqNames
+	if err = r.applySpreadTopologyState(ctx, logger, pcs, pclq, pclqTemplateSpec, dependentPclqNames); err != nil {
+		return err
+	}
 
 	// Inject MNNVL resourceClaims: resolve group hierarchically (PCLQ → PCS).
 	groupName, mnnvlEnabled := mnnvl.ResolveGroupNameHierarchically(pclqTemplateSpec.Annotations, pcs.Annotations)

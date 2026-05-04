@@ -64,6 +64,9 @@ func (v *topologyConstraintsValidator) validate() field.ErrorList {
 	if len(errs) > 0 {
 		return errs
 	}
+	if errs = v.validateSpreadTopologyConstraints(pcsTemplateFLDPath); len(errs) > 0 {
+		return errs
+	}
 	return v.validateHierarchicalTopologyConstraints(pcsTemplateFLDPath)
 }
 
@@ -184,6 +187,55 @@ func (v *topologyConstraintsValidator) validateTopologyDomainsExistInClusterTopo
 	for i, pcsg := range v.pcs.Spec.Template.PodCliqueScalingGroupConfigs {
 		if tc := pcsg.TopologyConstraint; tc != nil {
 			validateDomain(tc.PackDomain, fldPath.Child("podCliqueScalingGroups").Index(i).Child("topologyConstraint"))
+		}
+	}
+
+	return allErrs
+}
+
+func (v *topologyConstraintsValidator) validateSpreadTopologyConstraints(fldPath *field.Path) field.ErrorList {
+	var allErrs field.ErrorList
+
+	if tc := v.pcs.Spec.Template.TopologyConstraint; tc != nil && tc.Spread {
+		allErrs = append(allErrs, field.Forbidden(
+			fldPath.Child("topologyConstraint").Child("spread"),
+			"spread topology is only supported on PodClique topology constraints"))
+	}
+
+	scalingGroupCliqueNames := map[string]string{}
+	for i, pcsg := range v.pcs.Spec.Template.PodCliqueScalingGroupConfigs {
+		if tc := pcsg.TopologyConstraint; tc != nil && tc.Spread {
+			allErrs = append(allErrs, field.Forbidden(
+				fldPath.Child("podCliqueScalingGroups").Index(i).Child("topologyConstraint").Child("spread"),
+				"spread topology is only supported on PodClique topology constraints"))
+		}
+		for _, cliqueName := range pcsg.CliqueNames {
+			scalingGroupCliqueNames[cliqueName] = pcsg.Name
+		}
+	}
+
+	for i, clique := range v.pcs.Spec.Template.Cliques {
+		if clique.TopologyConstraint == nil || !clique.TopologyConstraint.Spread {
+			continue
+		}
+
+		spreadPath := fldPath.Child("cliques").Index(i).Child("topologyConstraint").Child("spread")
+		if v.pcs.Spec.Template.StartupType == nil || *v.pcs.Spec.Template.StartupType != grovecorev1alpha1.CliqueStartupTypeExplicit {
+			allErrs = append(allErrs, field.Invalid(
+				spreadPath,
+				clique.TopologyConstraint.Spread,
+				"spread topology requires cliqueStartupType to be CliqueStartupTypeExplicit"))
+		}
+		if len(clique.Spec.StartsAfter) == 0 {
+			allErrs = append(allErrs, field.Invalid(
+				spreadPath,
+				clique.TopologyConstraint.Spread,
+				"spread topology requires the PodClique to define startsAfter"))
+		}
+		if pcsgName, ok := scalingGroupCliqueNames[clique.Name]; ok {
+			allErrs = append(allErrs, field.Forbidden(
+				spreadPath,
+				fmt.Sprintf("spread topology is not supported for PodCliques that belong to PodCliqueScalingGroup %q", pcsgName)))
 		}
 	}
 
@@ -355,7 +407,8 @@ func isAllowedInvalidTopologyConstraintRepair(old, new *grovecorev1alpha1.Topolo
 	return old.TopologyName == "" &&
 		old.PackDomain != "" &&
 		new.TopologyName != "" &&
-		new.PackDomain == old.PackDomain
+		new.PackDomain == old.PackDomain &&
+		new.Spread == old.Spread
 }
 
 func hasRepairableLegacyTopologyConstraint(pcs *grovecorev1alpha1.PodCliqueSet) bool {
@@ -389,7 +442,7 @@ func constraintChanged(old, new *grovecorev1alpha1.TopologyConstraint) bool {
 	if old == nil || new == nil {
 		return true
 	}
-	return old.TopologyName != new.TopologyName || old.PackDomain != new.PackDomain
+	return old.TopologyName != new.TopologyName || old.PackDomain != new.PackDomain || old.Spread != new.Spread
 }
 
 // constraintChangeMsg generates a specific error message based on the type of change.
@@ -408,6 +461,10 @@ func constraintChangeMsg(kind, name string, old, new *grovecorev1alpha1.Topology
 	if old.TopologyName != new.TopologyName {
 		return fmt.Sprintf("%s%s topology constraint topologyName cannot be changed from '%s' to '%s'",
 			kind, identifier, old.TopologyName, new.TopologyName)
+	}
+	if old.Spread != new.Spread {
+		return fmt.Sprintf("%s%s topology constraint spread cannot be changed from '%t' to '%t'",
+			kind, identifier, old.Spread, new.Spread)
 	}
 	return fmt.Sprintf("%s%s topology constraint cannot be changed from '%s' to '%s'",
 		kind, identifier, old.PackDomain, new.PackDomain)

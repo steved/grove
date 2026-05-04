@@ -162,22 +162,68 @@ func (r _resource) runSyncFlow(logger logr.Logger, sc *syncContext) syncFlowResu
 		result.recordError(err)
 	}
 	result.recordPendingScheduleGatedPods(skippedScheduleGatedPods)
+	if err := r.deleteSupersededSpreadTopologyPodsAfterActualPodsReady(sc, logger); err != nil {
+		result.recordError(err)
+	}
 	return result
+}
+
+func (r _resource) deleteSupersededSpreadTopologyPodsAfterActualPodsReady(sc *syncContext, logger logr.Logger) error {
+	if componentutils.GetTopologySpreadPhase(sc.pclq.Annotations) != componentutils.TopologySpreadPhaseActual {
+		return nil
+	}
+	supersededPods := lo.Filter(sc.existingPCLQPods, func(pod *corev1.Pod, _ int) bool {
+		return isSupersededSpreadTopologyPod(sc.pclq, pod)
+	})
+	if len(supersededPods) == 0 {
+		return nil
+	}
+	if !hasScheduledActiveReadyActualSpreadPods(sc) {
+		logger.Info("waiting to delete superseded spread topology pods until desired actual pods are scheduled, active, and ready",
+			"pclq", client.ObjectKeyFromObject(sc.pclq),
+			"actualReplicas", len(sc.replicaAccountingPods()),
+			"desiredReplicas", sc.pclq.Spec.Replicas,
+		)
+		return nil
+	}
+	deletionTasks := r.createPodDeletionTasks(logger, sc.pclq, supersededPods, sc.pclqExpectationsStoreKey)
+	if runResult := utils.RunConcurrentlyWithSlowStart(sc.ctx, logger, 1, deletionTasks); runResult.HasErrors() {
+		err := runResult.GetAggregatedError()
+		logger.Error(err, "failed to delete superseded spread topology pods", "runSummary", runResult.GetSummary())
+		return groveerr.WrapError(err,
+			errCodeDeletePod,
+			component.OperationSync,
+			fmt.Sprintf("failed to delete superseded spread topology Pods for PodClique %v", client.ObjectKeyFromObject(sc.pclq)),
+		)
+	}
+	return groveerr.New(groveerr.ErrCodeRequeueAfter,
+		component.OperationSync,
+		fmt.Sprintf("deleted %d superseded spread topology Pods for PodClique %v after desired actual Pods became ready", len(supersededPods), client.ObjectKeyFromObject(sc.pclq)),
+	)
+}
+
+func isSupersededSpreadTopologyPod(pclq *grovecorev1alpha1.PodClique, pod *corev1.Pod) bool {
+	if k8sutils.IsResourceTerminating(pod.ObjectMeta) {
+		return false
+	}
+	return !componentutils.IsTopologySpreadPodInDesiredActualSlot(pclq, pod)
 }
 
 // syncExpectationsAndComputeDifference reconciles create/delete expectations with actual pod state and computes the replica difference
 // It takes in the existing pods and adjusts the captured create/delete expectations in the ExpectationStore. Post synchronization
 // it computes the difference of pods using => as-is-pods + pods-expecting-creation - desired-pods - pods-expecting-deletion
 func (r _resource) syncExpectationsAndComputeDifference(logger logr.Logger, sc *syncContext) int {
-	terminatingPodUIDs, nonTerminatingPodUIDs := getTerminatingAndNonTerminatingPodUIDs(sc.existingPCLQPods)
+	accountingPods := sc.replicaAccountingPods()
+	terminatingPodUIDs, nonTerminatingPodUIDs := getTerminatingAndNonTerminatingPodUIDs(accountingPods)
 	r.expectationsStore.SyncExpectations(sc.pclqExpectationsStoreKey, nonTerminatingPodUIDs, terminatingPodUIDs)
 	createExpectations := r.expectationsStore.GetCreateExpectations(sc.pclqExpectationsStoreKey)
 	deleteExpectations := r.expectationsStore.GetDeleteExpectations(sc.pclqExpectationsStoreKey)
-	diff := len(sc.existingPCLQPods) + len(createExpectations) - int(sc.pclq.Spec.Replicas) - len(deleteExpectations)
+	diff := len(accountingPods) + len(createExpectations) - int(sc.pclq.Spec.Replicas) - len(deleteExpectations)
 
 	logger.V(4).Info("synced expectations",
 		"pclq.spec.replicas", sc.pclq.Spec.Replicas,
 		"existingPCLPodNames", lo.Map(sc.existingPCLQPods, func(pod *corev1.Pod, _ int) string { return pod.Name }),
+		"replicaAccountingPodNames", lo.Map(accountingPods, func(pod *corev1.Pod, _ int) string { return pod.Name }),
 		"createExpectations", createExpectations,
 		"deleteExpectations", deleteExpectations,
 		"diff", diff,
@@ -230,10 +276,11 @@ func (r _resource) deleteExcessPods(sc *syncContext, logger logr.Logger, diff in
 // selectExcessPodsToDelete identifies excess pods for deletion using DeletionSorter for prioritization
 func selectExcessPodsToDelete(sc *syncContext, logger logr.Logger) []*corev1.Pod {
 	var candidatePodsToDelete []*corev1.Pod
-	if diff := len(sc.existingPCLQPods) - int(sc.pclq.Spec.Replicas); diff > 0 {
+	accountingPods := sc.replicaAccountingPods()
+	if diff := len(accountingPods) - int(sc.pclq.Spec.Replicas); diff > 0 {
 		logger.Info("found excess pods for PodClique", "numExcessPods", diff)
 		sorter := DeletionSorter{
-			Pods: sc.existingPCLQPods,
+			Pods: accountingPods,
 		}
 		sorter.ExpectedPodTemplateHash = sc.getExpectedPodTemplateHash()
 		sort.Sort(sorter)
@@ -409,7 +456,7 @@ func hasPodGangSchedulingGate(pod *corev1.Pod) bool {
 // createPods creates the specified number of new pods for the PodClique with proper indexing and concurrency control
 func (r _resource) createPods(ctx context.Context, logger logr.Logger, sc *syncContext, numPods int) (int, error) {
 	// Pre-calculate all needed indices to avoid race conditions
-	availableIndices, err := index.GetAvailableIndices(logger, sc.existingPCLQPods, numPods)
+	availableIndices, err := index.GetAvailableIndices(logger, sc.replicaAccountingPods(), numPods)
 	if err != nil {
 		return 0, groveerr.WrapError(err,
 			errCodeGetAvailablePodHostNameIndices,
@@ -446,6 +493,32 @@ type syncContext struct {
 	podNamesUpdatedInPCLQPodGangs []string
 	pclqExpectationsStoreKey      string
 	expectedPodTemplateHash       string
+}
+
+func (sc *syncContext) replicaAccountingPods() []*corev1.Pod {
+	if componentutils.GetTopologySpreadPhase(sc.pclq.Annotations) != componentutils.TopologySpreadPhaseActual {
+		return sc.existingPCLQPods
+	}
+	return lo.Filter(sc.existingPCLQPods, func(pod *corev1.Pod, _ int) bool {
+		return componentutils.IsTopologySpreadPodInDesiredActualSlot(sc.pclq, pod)
+	})
+}
+
+func hasScheduledActiveReadyActualSpreadPods(sc *syncContext) bool {
+	actualPods := sc.replicaAccountingPods()
+	if len(actualPods) < int(sc.pclq.Spec.Replicas) {
+		return false
+	}
+	readyActualPods := lo.CountBy(actualPods, func(pod *corev1.Pod) bool {
+		return isPodScheduled(pod) && k8sutils.IsPodActive(pod) && k8sutils.IsPodReady(pod)
+	})
+	return readyActualPods >= int(sc.pclq.Spec.Replicas)
+}
+
+func isPodScheduled(pod *corev1.Pod) bool {
+	return pod.Spec.NodeName != "" || slices.ContainsFunc(pod.Status.Conditions, func(condition corev1.PodCondition) bool {
+		return condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionTrue
+	})
 }
 
 // syncFlowResult captures the result of a sync flow run.

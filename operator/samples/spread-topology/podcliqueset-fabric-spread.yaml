@@ -1,0 +1,122 @@
+# Label nodes before applying. A single-node kind cluster can use one fabric:
+# kubectl label node <node-name> node.kubernetes.io/fabric-pod=fabric-a --overwrite
+#
+# On a multi-node kind cluster, the cyborg clique expands to two replicas per
+# fabric where the lpu dependency clique has Ready pods.
+# The cyborg CPU request is intentionally high for a 10-CPU kind worker: two
+# placeholder reservations fit per fabric node, but the actual cyborg pods must
+# preempt those lower-priority placeholders before they can become Ready.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: grove-spread-placeholder-low
+value: -100000
+globalDefault: false
+description: Low priority for Grove spread-topology placeholder pods.
+---
+apiVersion: grove.io/v1alpha1
+kind: ClusterTopology
+metadata:
+  name: spread-fabric
+spec:
+  levels:
+    - domain: block
+      key: node.kubernetes.io/fabric-pod
+    - domain: host
+      key: kubernetes.io/hostname
+---
+apiVersion: grove.io/v1alpha1
+kind: PodCliqueSet
+metadata:
+  name: spread-fabric-demo
+  labels:
+    app: spread-fabric-demo
+spec:
+  replicas: 1
+  template:
+    terminationDelay: 1m
+    cliqueStartupType: CliqueStartupTypeExplicit
+    cliques:
+      - name: lpu
+        labels:
+          demo.grove.io/workload: spread-fabric-demo
+          demo.grove.io/clique: lpu
+        spec:
+          roleName: lpu
+          replicas: 2
+          minAvailable: 2
+          podSpec:
+            terminationGracePeriodSeconds: 5
+            affinity:
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchExpressions:
+                        - key: demo.grove.io/clique
+                          operator: In
+                          values:
+                            - lpu
+                    topologyKey: node.kubernetes.io/fabric-pod
+            containers:
+              - name: lpu
+                image: busybox:1.36
+                imagePullPolicy: IfNotPresent
+                command:
+                  - sh
+                  - -c
+                  - |
+                    sleep 10
+                    touch /tmp/lpu-ready
+                    sleep 3600
+                readinessProbe:
+                  exec:
+                    command:
+                      - sh
+                      - -c
+                      - test -f /tmp/lpu-ready
+                  periodSeconds: 2
+                  failureThreshold: 1
+                resources:
+                  requests:
+                    cpu: 10m
+                    memory: 16Mi
+      - name: cyborg
+        labels:
+          demo.grove.io/workload: spread-fabric-demo
+          demo.grove.io/clique: cyborg
+        topologyConstraint:
+          topologyName: spread-fabric
+          packDomain: block
+          spread: true
+        spec:
+          roleName: cyborg
+          replicas: 2
+          minAvailable: 1
+          startsAfter:
+            - lpu
+          podSpec:
+            terminationGracePeriodSeconds: 5
+            containers:
+              - name: cyborg
+                image: busybox:1.36
+                imagePullPolicy: IfNotPresent
+                command:
+                  - sh
+                  - -c
+                  - |
+                    sleep 10
+                    touch /tmp/cyborg-ready
+                    sleep 3600
+                readinessProbe:
+                  exec:
+                    command:
+                      - sh
+                      - -c
+                      - test -f /tmp/cyborg-ready
+                  periodSeconds: 2
+                  failureThreshold: 1
+                resources:
+                  requests:
+                    cpu: 4000m
+                    memory: 16Mi

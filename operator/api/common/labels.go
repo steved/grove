@@ -47,6 +47,10 @@ const (
 	LabelPodTemplateHash = "grove.io/pod-template-hash"
 	// LabelSchedulerName is a label on PodGang that indicates which scheduler backend should sync this PodGang.
 	LabelSchedulerName = "grove.io/scheduler-name"
+	// LabelTopologySpreadPlaceholder identifies placeholder Pods created for spread topology reservation.
+	LabelTopologySpreadPlaceholder = "grove.io/topology-spread-placeholder"
+	// LabelTopologySpreadDomain stores the topology domain value assigned to a spread Pod.
+	LabelTopologySpreadDomain = "grove.io/topology-spread-domain"
 )
 
 // Labels for setting component names for all managed resources whose lifecycle
