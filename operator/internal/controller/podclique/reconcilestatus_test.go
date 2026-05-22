@@ -609,14 +609,14 @@ func TestMutateCurrentHashesSeedsInitialTopologyAffinityHash(t *testing.T) {
 		},
 	}
 
-	expectedPodTemplateHashes, err := componentutils.GetExpectedPCLQPodTemplateHashCandidates(pcs, pclq.ObjectMeta)
+	expectedPodTemplateHash, err := componentutils.GetExpectedPCLQPodTemplateHash(pcs, pclq.ObjectMeta)
 	require.NoError(t, err)
 
-	pcs.Status.CurrentGenerationHash = ptr.To(expectedPodTemplateHashes.Canonical)
-	pclq.Labels[apicommon.LabelPodTemplateHash] = expectedPodTemplateHashes.Canonical
+	pcs.Status.CurrentGenerationHash = ptr.To(expectedPodTemplateHash)
+	pclq.Labels[apicommon.LabelPodTemplateHash] = expectedPodTemplateHash
 
 	require.NoError(t, mutateCurrentHashes(logr.Discard(), pcs, pclq))
 
 	require.NotNil(t, pclq.Status.CurrentPodTemplateHash)
-	assert.Equal(t, ptr.To(expectedPodTemplateHashes.Canonical), pclq.Status.CurrentPodCliqueSetGenerationHash)
+	assert.Equal(t, ptr.To(expectedPodTemplateHash), pclq.Status.CurrentPodCliqueSetGenerationHash)
 }
