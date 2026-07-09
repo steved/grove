@@ -19,65 +19,71 @@ package topology
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
-	"github.com/ai-dynamo/grove/operator/internal/controller/nodelabels"
+	"github.com/ai-dynamo/grove/operator/internal/controller/topologyresolver"
 	internalutils "github.com/ai-dynamo/grove/operator/internal/utils"
 
 	"github.com/samber/lo"
+	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// ResolvePodCliqueTopologyAffinityStatus resolves topology status for a PodClique. It returns
+// PodCliqueTopologyAffinityState contains persisted status and the placement data used in one reconciliation.
+type PodCliqueTopologyAffinityState struct {
+	*grovecorev1alpha1.PodCliqueTopologyAffinityStatus
+	LabelKey string
+}
+
+// ResolvePodCliqueTopologyAffinity resolves topology status for a PodClique. It returns
 // nil when the PodClique has no topologyAffinity.
-func ResolvePodCliqueTopologyAffinityStatus(ctx context.Context, cl client.Client, nodeLabels nodelabels.Cache, pcs *grovecorev1alpha1.PodCliqueSet, pclq *grovecorev1alpha1.PodClique) (*grovecorev1alpha1.PodCliqueTopologyAffinityStatus, error) {
+func ResolvePodCliqueTopologyAffinity(ctx context.Context, cl client.Client, topologyResolver topologyresolver.Resolver, pcs *grovecorev1alpha1.PodCliqueSet, pclq *grovecorev1alpha1.PodClique) (*PodCliqueTopologyAffinityState, error) {
 	if pclq.Spec.Affinity == nil || pclq.Spec.Affinity.TopologyAffinity == nil {
 		return nil, nil
 	}
 
 	affinity := pclq.Spec.Affinity.TopologyAffinity
-	labelKey, allDomains, err := ValuesForAffinity(ctx, cl, nodeLabels, affinity)
+	level, generation, err := LevelForDomain(ctx, cl, affinity.TopologyName, affinity.Domain)
 	if err != nil {
 		return nil, err
 	}
+	allDomains, err := topologyResolver.NodeValues(ctx, level.Key)
+	if err != nil {
+		return nil, err
+	}
+	slices.Sort(allDomains)
 
-	associatedDomains, associatedReady, err := AssociatedScheduledDomains(ctx, cl, nodeLabels, pcs, pclq, affinity, labelKey)
+	associatedDomains, associatedReady, err := AssociatedScheduledDomains(ctx, cl, topologyResolver, pcs, pclq, affinity, level)
 	if err != nil {
 		return nil, err
 	}
 	targetDomains := allDomains
 	if associatedReady {
 		targetDomains = associatedDomains
+	} else if pclq.Status.TopologyAffinity != nil && pclq.Status.TopologyAffinity.AssociatedReady {
+		targetDomains = slices.Clone(pclq.Status.TopologyAffinity.TargetDomains)
 	}
 
-	return &grovecorev1alpha1.PodCliqueTopologyAffinityStatus{
-		LabelKey:          labelKey,
-		AllDomains:        allDomains,
-		AssociatedDomains: associatedDomains,
-		TargetDomains:     targetDomains,
-		AssociatedReady:   associatedReady,
+	return &PodCliqueTopologyAffinityState{
+		PodCliqueTopologyAffinityStatus: &grovecorev1alpha1.PodCliqueTopologyAffinityStatus{
+			ObservedTopologyBindingGeneration: generation,
+			AllDomains:                        allDomains,
+			AssociatedDomains:                 associatedDomains,
+			TargetDomains:                     targetDomains,
+			AssociatedReady:                   associatedReady,
+		},
+		LabelKey: level.Key,
 	}, nil
-}
-
-// PodCliqueTemplateForPodClique returns the PodClique template for a concrete PodClique.
-func PodCliqueTemplateForPodClique(pcs *grovecorev1alpha1.PodCliqueSet, pclq *grovecorev1alpha1.PodClique) (*grovecorev1alpha1.PodCliqueTemplateSpec, error) {
-	cliqueName, err := internalutils.GetPodCliqueNameFromPodCliqueFQN(pclq.ObjectMeta)
-	if err != nil {
-		return nil, err
-	}
-	template := componentutils.FindPodCliqueTemplateSpecByName(pcs, cliqueName)
-	if template == nil {
-		return nil, fmt.Errorf("PodClique template %q not found in PodCliqueSet %q", cliqueName, pcs.Name)
-	}
-	return template, nil
 }
 
 // AssociatedScheduledDomains returns the union of topology domains used by the
 // associated cliqueNames and whether all associated PodCliques have met their
 // scheduled minimum.
-func AssociatedScheduledDomains(ctx context.Context, cl client.Client, nodeLabels nodelabels.Cache, pcs *grovecorev1alpha1.PodCliqueSet, pclq *grovecorev1alpha1.PodClique, affinity *grovecorev1alpha1.TopologyAffinity, labelKey string) ([]string, bool, error) {
+func AssociatedScheduledDomains(ctx context.Context, cl client.Client, topologyResolver topologyresolver.Resolver, pcs *grovecorev1alpha1.PodCliqueSet, pclq *grovecorev1alpha1.PodClique, affinity *grovecorev1alpha1.TopologyAffinity, level grovecorev1alpha1.TopologyLevel) ([]string, bool, error) {
 	associatedPCLQNames, err := AssociatedPodCliqueFQNs(pcs, pclq, affinity)
 	if err != nil {
 		return nil, false, err
@@ -85,10 +91,14 @@ func AssociatedScheduledDomains(ctx context.Context, cl client.Client, nodeLabel
 
 	associatedDomains := sets.New[string]()
 	associatedReady := true
+	allScaledToZero := true
 	for _, associatedPCLQName := range associatedPCLQNames {
 		associatedPCLQ := &grovecorev1alpha1.PodClique{}
 		if err = cl.Get(ctx, client.ObjectKey{Namespace: pclq.Namespace, Name: associatedPCLQName}, associatedPCLQ); err != nil {
 			return nil, false, client.IgnoreNotFound(err)
+		}
+		if associatedPCLQ.Spec.Replicas != 0 {
+			allScaledToZero = false
 		}
 
 		minScheduled, ok := associatedPCLQ.MinAvailable()
@@ -104,15 +114,75 @@ func AssociatedScheduledDomains(ctx context.Context, cl client.Client, nodeLabel
 			if pod.Spec.NodeName == "" {
 				continue
 			}
-			value, err := nodeLabels.ValueForNode(ctx, labelKey, pod.Spec.NodeName)
+			domains, err := associatedPodDomains(ctx, cl, topologyResolver, pod, level)
 			if err != nil {
-				return nil, false, fmt.Errorf("failed to resolve topology label %q for node %q: %w", labelKey, pod.Spec.NodeName, err)
+				return nil, false, err
 			}
-			associatedDomains.Insert(value)
+			associatedDomains.Insert(domains...)
 		}
+	}
+	if associatedDomains.Len() == 0 && !allScaledToZero {
+		associatedReady = false
 	}
 
 	return sets.List(associatedDomains), associatedReady, nil
+}
+
+func associatedPodDomains(ctx context.Context, cl client.Client, topologyResolver topologyresolver.Resolver, pod *corev1.Pod, level grovecorev1alpha1.TopologyLevel) ([]string, error) {
+	if len(pod.Spec.ResourceClaims) > 0 && len(level.ResourceSliceAttributes) > 0 {
+		allocated := make([]resourcev1.DeviceRequestAllocationResult, 0)
+		for _, podClaim := range pod.Spec.ResourceClaims {
+			claimName, err := resourceClaimName(pod, podClaim)
+			if err != nil {
+				return nil, err
+			}
+			claim := &resourcev1.ResourceClaim{}
+			if err := cl.Get(ctx, client.ObjectKey{Namespace: pod.Namespace, Name: claimName}, claim); err != nil {
+				return nil, fmt.Errorf("failed to get ResourceClaim %q for Pod %q: %w", claimName, client.ObjectKeyFromObject(pod), err)
+			}
+			if claim.Status.Allocation == nil {
+				return nil, fmt.Errorf("ResourceClaim %q for Pod %q is not allocated", claimName, client.ObjectKeyFromObject(pod))
+			}
+			allocated = append(allocated, claim.Status.Allocation.Devices.Results...)
+		}
+		domains, topologyBearing, err := topologyResolver.ResourceSliceDeviceDomains(ctx, level.ResourceSliceAttributes, allocated)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve allocated devices for Pod %q: %w", client.ObjectKeyFromObject(pod), err)
+		}
+		if topologyBearing {
+			if len(domains) > 1 {
+				return nil, fmt.Errorf("pod %q resolves to multiple topology domains from allocated devices: %v", client.ObjectKeyFromObject(pod), domains)
+			}
+			values, err := topologyResolver.NodeValues(ctx, level.Key)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve topology label %q: %w", level.Key, err)
+			}
+			if len(domains) == 1 && !slices.Contains(values, domains[0]) {
+				return nil, fmt.Errorf("topology domain %q resolved for pod %q is not selectable by Node label %q", domains[0], client.ObjectKeyFromObject(pod), level.Key)
+			}
+			return domains, nil
+		}
+	}
+	if level.Key == "" {
+		return nil, fmt.Errorf("pod %q has no topology-bearing allocated devices and topology level %q has no Node label representation", client.ObjectKeyFromObject(pod), level.Domain)
+	}
+	value, err := topologyResolver.NodeValue(ctx, level.Key, pod.Spec.NodeName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve topology label %q for node %q: %w", level.Key, pod.Spec.NodeName, err)
+	}
+	return []string{value}, nil
+}
+
+func resourceClaimName(pod *corev1.Pod, claim corev1.PodResourceClaim) (string, error) {
+	if claim.ResourceClaimName != nil {
+		return *claim.ResourceClaimName, nil
+	}
+	for _, status := range pod.Status.ResourceClaimStatuses {
+		if status.Name == claim.Name && status.ResourceClaimName != nil {
+			return *status.ResourceClaimName, nil
+		}
+	}
+	return "", fmt.Errorf("pod %q ResourceClaim reference %q has no concrete claim name", client.ObjectKeyFromObject(pod), claim.Name)
 }
 
 // AssociatedPodCliqueFQNs resolves unqualified cliqueNames in topologyAffinity

@@ -161,10 +161,11 @@ type PodCliqueStatus struct {
 
 // PodCliqueTopologyAffinityStatus captures the resolved topology-affinity state for a PodClique.
 type PodCliqueTopologyAffinityStatus struct {
-	// LabelKey is the node label key for the configured topology domain.
+	// ObservedTopologyBindingGeneration is the ClusterTopologyBinding generation
+	// last accepted for a complete topology resolution.
 	// +optional
-	LabelKey string `json:"labelKey,omitempty"`
-	// AllDomains is the set of all currently known values for LabelKey.
+	ObservedTopologyBindingGeneration int64 `json:"observedTopologyBindingGeneration,omitempty"`
+	// AllDomains is the set of domains currently capable of hosting a constrained candidate.
 	// +listType=set
 	// +optional
 	AllDomains []string `json:"allDomains,omitempty"`

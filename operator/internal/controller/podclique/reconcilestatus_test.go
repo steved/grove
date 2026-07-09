@@ -551,17 +551,17 @@ func TestComputeMinAvailableBreachedConditionPartialScheduleRegression(t *testin
 func TestMutateTopologyAffinityStatus(t *testing.T) {
 	pclq := &grovecorev1alpha1.PodClique{}
 	state := &grovecorev1alpha1.PodCliqueTopologyAffinityStatus{
-		LabelKey:          "topology.grove.io/rack",
-		AllDomains:        []string{"rack-a", "rack-b", "rack-c"},
-		AssociatedDomains: []string{"rack-a", "rack-c"},
-		TargetDomains:     []string{"rack-a", "rack-c"},
-		AssociatedReady:   true,
+		ObservedTopologyBindingGeneration: 3,
+		AllDomains:                        []string{"rack-a", "rack-b", "rack-c"},
+		AssociatedDomains:                 []string{"rack-a", "rack-c"},
+		TargetDomains:                     []string{"rack-a", "rack-c"},
+		AssociatedReady:                   true,
 	}
 
 	mutateTopologyAffinityStatus(pclq, state)
 
 	require.NotNil(t, pclq.Status.TopologyAffinity)
-	assert.Equal(t, "topology.grove.io/rack", pclq.Status.TopologyAffinity.LabelKey)
+	assert.Equal(t, int64(3), pclq.Status.TopologyAffinity.ObservedTopologyBindingGeneration)
 	assert.Equal(t, []string{"rack-a", "rack-b", "rack-c"}, pclq.Status.TopologyAffinity.AllDomains)
 	assert.Equal(t, []string{"rack-a", "rack-c"}, pclq.Status.TopologyAffinity.AssociatedDomains)
 	assert.Equal(t, []string{"rack-a", "rack-c"}, pclq.Status.TopologyAffinity.TargetDomains)

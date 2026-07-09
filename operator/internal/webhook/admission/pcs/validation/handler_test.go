@@ -416,17 +416,19 @@ func TestValidateUpdateAllowsDeletingPodCliqueSetWithMissingTopology(t *testing.
 
 func TestValidateUpdateTopologyAffinityScaleSubresourceAllowsReplicasAboveMinAvailable(t *testing.T) {
 	tests := []struct {
-		name        string
-		subResource string
-		wantErrText string
+		name          string
+		subResource   string
+		enableFeature bool
+		wantErrText   string
 	}{
 		{
 			name:        "scale subresource",
 			subResource: scaleSubResource,
 		},
 		{
-			name:        "regular update",
-			wantErrText: "minAvailable must equal replicas",
+			name:          "regular update",
+			enableFeature: true,
+			wantErrText:   "minAvailable must equal replicas",
 		},
 	}
 
@@ -442,6 +444,7 @@ func TestValidateUpdateTopologyAffinityScaleSubresourceAllowsReplicasAboveMinAva
 			}
 			cfg := groveconfigv1alpha1.OperatorConfiguration{
 				TopologyAwareScheduling: groveconfigv1alpha1.TopologyAwareSchedulingConfiguration{Enabled: true},
+				FeatureGates:            groveconfigv1alpha1.FeatureGateConfiguration{PodCliqueTopologyAffinity: tt.enableFeature},
 				Network:                 getDefaultNetworkConfig(),
 				Scheduler:               groveconfigv1alpha1.SchedulerConfiguration{Profiles: []groveconfigv1alpha1.SchedulerProfile{{Name: groveconfigv1alpha1.SchedulerNameKube}}, DefaultProfileName: string(groveconfigv1alpha1.SchedulerNameKube)},
 			}
@@ -474,6 +477,21 @@ func TestValidateUpdateTopologyAffinityScaleSubresourceAllowsReplicasAboveMinAva
 			assert.Contains(t, err.Error(), tt.wantErrText)
 		})
 	}
+}
+
+func TestValidateCreateRejectsTopologyAffinityWhenFeatureDisabled(t *testing.T) {
+	cl := testutils.NewTestClientBuilder().WithObjects(topologyAffinityClusterTopology()).Build()
+	mgr := &testutils.FakeManager{Client: cl, Scheme: cl.Scheme(), Logger: logr.Discard()}
+	cfg := groveconfigv1alpha1.OperatorConfiguration{
+		TopologyAwareScheduling: groveconfigv1alpha1.TopologyAwareSchedulingConfiguration{Enabled: true},
+		Network:                 getDefaultNetworkConfig(),
+		Scheduler:               groveconfigv1alpha1.SchedulerConfiguration{Profiles: []groveconfigv1alpha1.SchedulerProfile{{Name: groveconfigv1alpha1.SchedulerNameKube}}, DefaultProfileName: string(groveconfigv1alpha1.SchedulerNameKube)},
+	}
+	handler := NewHandler(mgr, &cfg, testutils.NewDefaultFakeRegistry())
+	pcs, _ := topologyAffinityValidationPCS()
+
+	_, err := handler.ValidateCreate(context.Background(), pcs)
+	require.ErrorContains(t, err, "topologyAffinity requires the PodCliqueTopologyAffinity feature gate")
 }
 
 // TestValidateDelete tests validation of PodCliqueSet deletion requests.

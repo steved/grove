@@ -225,7 +225,7 @@ func buildStandalonePCLQInfosForBasePodGang(sc *syncContext, pcsReplica int) ([]
 		pcsgConfig := componentutils.FindScalingGroupConfigForClique(sc.pcs.Spec.Template.PodCliqueScalingGroupConfigs, pclqTemplateSpec.Name)
 		if pcsgConfig == nil { // Standalone PodClique
 			pclqFQN := apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: sc.pcs.Name, Replica: pcsReplica}, pclqTemplateSpec.Name)
-			pclqInfo, err := buildPodCliqueInfo(sc, pclqTemplateSpec, pclqFQN, false)
+			pclqInfo, err := buildPodCliqueInfo(sc, pclqTemplateSpec, pclqFQN)
 			if err != nil {
 				return nil, err
 			}
@@ -270,7 +270,7 @@ func doBuildBasePodGangPCLQsAndPCSGPackConstraints(sc *syncContext, pcsReplica i
 				return nil, nil, fmt.Errorf("PodCliqueScalingGroup %q references a PodClique %q that does not exist in the PodCliqueSet: %v", pcsgConfig.Name, pclqName, client.ObjectKeyFromObject(sc.pcs))
 			}
 			pclqFQN := apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgFQN, Replica: replicaIndex}, pclqName)
-			pclqInfo, err := buildPodCliqueInfo(sc, pclqTemplateSpec, pclqFQN, true)
+			pclqInfo, err := buildPodCliqueInfo(sc, pclqTemplateSpec, pclqFQN)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -322,7 +322,7 @@ func doBuildExpectedScaledPodGangForPCSG(sc *syncContext, pcsgFQN string, pcsgCo
 			return nil, fmt.Errorf("PodCliqueScalingGroup %q references a PodClique %q that does not exist in the PodCliqueSet: %v", pcsgConfig.Name, pclqName, client.ObjectKeyFromObject(sc.pcs))
 		}
 		pclqFQN := apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgFQN, Replica: pcsgReplica}, pclqName)
-		pclqInfo, err := buildPodCliqueInfo(sc, pclqTemplateSpec, pclqFQN, true)
+		pclqInfo, err := buildPodCliqueInfo(sc, pclqTemplateSpec, pclqFQN)
 		if err != nil {
 			return nil, err
 		}
@@ -354,8 +354,8 @@ func doBuildExpectedScaledPodGangForPCSG(sc *syncContext, pcsgFQN string, pcsgCo
 }
 
 // buildPodCliqueInfo creates pclqInfo with appropriate replica counts.
-func buildPodCliqueInfo(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec, pclqFQN string, belongsToPCSG bool) (pclqInfo, error) {
-	replicas := determinePodCliqueReplicas(sc, pclqTemplateSpec, pclqFQN, belongsToPCSG)
+func buildPodCliqueInfo(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec, pclqFQN string) (pclqInfo, error) {
+	replicas := determinePodCliqueReplicas(sc, pclqTemplateSpec, pclqFQN)
 	minAvailable := *pclqTemplateSpec.Spec.MinAvailable
 	if pclqTemplateSpec.Spec.Affinity != nil && pclqTemplateSpec.Spec.Affinity.TopologyAffinity != nil {
 		topologyExpandedReplicas, err := determineTopologyAffinityReplicas(sc, pclqFQN, replicas)
@@ -423,21 +423,18 @@ func topologyLevelKeyForPackDomain(sc *syncContext, nsName types.NamespacedName,
 		sc.logger.Info(packConstraintType+" topology domain not found in cluster topology levels, skipping setting "+packConstraintType+" pack constraint", "namespacedName", nsName, "topologyDomain", topologyDomain, "topologyConstraint", *topologyConstraint)
 		return nil
 	}
+	if topologyLevel.Key == "" {
+		sc.logger.Info(packConstraintType+" topology domain has no node label representation, skipping setting "+packConstraintType+" pack constraint", "namespacedName", nsName, "topologyDomain", topologyDomain)
+		return nil
+	}
 	return ptr.To(topologyLevel.Key)
 }
 
-// determinePodCliqueReplicas determines replica count considering HPA mutations.
-func determinePodCliqueReplicas(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec, pclqFQN string, belongsToPCSG bool) int32 {
-	if belongsToPCSG || pclqTemplateSpec.Spec.ScaleConfig == nil {
-		return pclqTemplateSpec.Spec.Replicas
-	}
+// determinePodCliqueReplicas returns the live replica count for an existing PodClique.
+// The template count is only the initial value used before the PodClique has been created.
+func determinePodCliqueReplicas(sc *syncContext, pclqTemplateSpec *grovecorev1alpha1.PodCliqueTemplateSpec, pclqFQN string) int32 {
 	matchingPCLQ, found := sc.existingPCLQByName[pclqFQN]
 	if !found {
-		// PodClique resource not found - might be during initial creation
-		// Fall back to template replicas but log warning for visibility
-		sc.logger.Info("[WARN]: PodClique resource not found, using template replicas",
-			"podCliqueFQN", pclqFQN,
-			"templateReplicas", pclqTemplateSpec.Spec.Replicas)
 		return pclqTemplateSpec.Spec.Replicas
 	}
 	return matchingPCLQ.Spec.Replicas

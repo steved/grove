@@ -103,7 +103,7 @@ func (r _resource) prepareSyncFlow(ctx context.Context, logger logr.Logger, pclq
 		)
 	}
 
-	sc.topologyAffinity, err = commontopology.ResolvePodCliqueTopologyAffinityStatus(ctx, r.client, r.nodeLabels, sc.pcs, pclq)
+	sc.topologyAffinity, err = commontopology.ResolvePodCliqueTopologyAffinity(ctx, r.client, r.topologyResolver, sc.pcs, pclq)
 	if err != nil {
 		return nil, groveerr.WrapError(err,
 			errCodeGetTopologyAffinity,
@@ -472,7 +472,7 @@ type syncContext struct {
 	podNamesUpdatedInPCLQPodGangSet componentutils.Set[string]
 	pclqExpectationsStoreKey        string
 	expectedPodTemplateHash         string
-	topologyAffinity                *grovecorev1alpha1.PodCliqueTopologyAffinityStatus
+	topologyAffinity                *commontopology.PodCliqueTopologyAffinityState
 }
 
 func (sc *syncContext) desiredReplicas() int {

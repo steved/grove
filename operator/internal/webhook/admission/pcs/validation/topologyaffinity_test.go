@@ -27,6 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -44,12 +45,31 @@ func TestValidatePodCliqueTopologyAffinity(t *testing.T) {
 		name        string
 		operation   admissionv1.Operation
 		subResource string
+		mutatePCS   func(*grovecorev1alpha1.PodCliqueSet)
 		mutateGPU   func(*grovecorev1alpha1.PodCliqueTemplateSpec)
+		mutateCT    func(*grovecorev1alpha1.ClusterTopologyBinding)
 		wantErrText string
 	}{
 		{
 			name:      "valid topology affinity",
 			operation: admissionv1.Create,
+		},
+		{
+			name:      "valid claim-backed topology affinity",
+			operation: admissionv1.Create,
+			mutateGPU: func(gpu *grovecorev1alpha1.PodCliqueTemplateSpec) {
+				gpu.Spec.PodSpec.ResourceClaims = []corev1.PodResourceClaim{{Name: "device", ResourceClaimName: ptr.To("device")}}
+			},
+		},
+		{
+			name:      "claim-backed topology affinity needs only the node key",
+			operation: admissionv1.Create,
+			mutateGPU: func(gpu *grovecorev1alpha1.PodCliqueTemplateSpec) {
+				gpu.Spec.PodSpec.ResourceClaims = []corev1.PodResourceClaim{{Name: "device", ResourceClaimName: ptr.To("device")}}
+			},
+			mutateCT: func(binding *grovecorev1alpha1.ClusterTopologyBinding) {
+				binding.Spec.Levels[0].ResourceSliceAttributes = nil
+			},
 		},
 		{
 			name:      "minAvailable must equal replicas",
@@ -59,6 +79,25 @@ func TestValidatePodCliqueTopologyAffinity(t *testing.T) {
 				gpu.Spec.MinAvailable = ptr.To[int32](1)
 			},
 			wantErrText: "minAvailable must equal replicas",
+		},
+		{
+			name:      "topology affinity must belong to scaling group",
+			operation: admissionv1.Create,
+			mutatePCS: func(pcs *grovecorev1alpha1.PodCliqueSet) {
+				pcs.Spec.Template.PodCliqueScalingGroupConfigs = nil
+			},
+			wantErrText: "topologyAffinity PodClique must belong to a PodCliqueScalingGroup",
+		},
+		{
+			name:      "associated clique must use same scaling group",
+			operation: admissionv1.Create,
+			mutatePCS: func(pcs *grovecorev1alpha1.PodCliqueSet) {
+				pcs.Spec.Template.PodCliqueScalingGroupConfigs = []grovecorev1alpha1.PodCliqueScalingGroupConfig{
+					{Name: "source", CliqueNames: []string{"lpu"}},
+					{Name: "target", CliqueNames: []string{"gpu"}},
+				}
+			},
+			wantErrText: "associated PodClique must belong to the same PodCliqueScalingGroup",
 		},
 		{
 			name:        "scale subresource update allows replicas above minAvailable",
@@ -112,12 +151,19 @@ func TestValidatePodCliqueTopologyAffinity(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			pcs, gpu := topologyAffinityValidationPCS()
+			if tc.mutatePCS != nil {
+				tc.mutatePCS(pcs)
+			}
 			if tc.mutateGPU != nil {
 				tc.mutateGPU(gpu)
 			}
+			binding := topologyAffinityClusterTopology()
+			if tc.mutateCT != nil {
+				tc.mutateCT(binding)
+			}
 			cl := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithObjects(topologyAffinityClusterTopology()).
+				WithObjects(binding).
 				Build()
 			validator := newPCSValidator(pcs, tc.operation, configv1alpha1.TopologyAwareSchedulingConfiguration{Enabled: true}, configv1alpha1.SchedulerConfiguration{}, cl, testutils.NewDefaultFakeRegistry(), tc.subResource)
 
@@ -205,6 +251,12 @@ func topologyAffinityValidationPCS() (*grovecorev1alpha1.PodCliqueSet, *grovecor
 			Replicas: 1,
 			Template: grovecorev1alpha1.PodCliqueSetTemplateSpec{
 				Cliques: []*grovecorev1alpha1.PodCliqueTemplateSpec{lpu, gpu},
+				PodCliqueScalingGroupConfigs: []grovecorev1alpha1.PodCliqueScalingGroupConfig{{
+					Name:         "workers",
+					CliqueNames:  []string{"lpu", "gpu"},
+					Replicas:     ptr.To[int32](1),
+					MinAvailable: ptr.To[int32](1),
+				}},
 			},
 		},
 	}, gpu
@@ -217,6 +269,10 @@ func topologyAffinityClusterTopology() *grovecorev1alpha1.ClusterTopologyBinding
 			Levels: []grovecorev1alpha1.TopologyLevel{{
 				Domain: grovecorev1alpha1.TopologyDomainBlock,
 				Key:    topologyAffinityTestKey,
+				ResourceSliceAttributes: []grovecorev1alpha1.ResourceSliceAttributeReference{{
+					Driver: "devices.example.com",
+					Name:   resourcev1.FullyQualifiedName("network.example.com/block"),
+				}},
 			}},
 		},
 	}

@@ -21,41 +21,22 @@ import (
 	"fmt"
 
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
-	"github.com/ai-dynamo/grove/operator/internal/clustertopology"
-	"github.com/ai-dynamo/grove/operator/internal/controller/nodelabels"
 
 	"github.com/samber/lo"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// KeyForDomain resolves a ClusterTopology domain to its node label key.
-func KeyForDomain(ctx context.Context, cl client.Client, topologyName string, domain grovecorev1alpha1.TopologyDomain) (string, error) {
-	levels, err := clustertopology.GetClusterTopologyLevels(ctx, cl, topologyName)
-	if err != nil {
-		return "", err
+// LevelForDomain resolves a ClusterTopologyBinding domain and returns its generation.
+func LevelForDomain(ctx context.Context, cl client.Client, topologyName string, domain grovecorev1alpha1.TopologyDomain) (grovecorev1alpha1.TopologyLevel, int64, error) {
+	binding := &grovecorev1alpha1.ClusterTopologyBinding{}
+	if err := cl.Get(ctx, client.ObjectKey{Name: topologyName}, binding); err != nil {
+		return grovecorev1alpha1.TopologyLevel{}, 0, err
 	}
-	level, ok := lo.Find(levels, func(level grovecorev1alpha1.TopologyLevel) bool {
+	level, ok := lo.Find(binding.Spec.Levels, func(level grovecorev1alpha1.TopologyLevel) bool {
 		return level.Domain == domain
 	})
 	if !ok {
-		return "", fmt.Errorf("topology domain %q not found in ClusterTopology %q", domain, topologyName)
+		return grovecorev1alpha1.TopologyLevel{}, 0, fmt.Errorf("topology domain %q not found in ClusterTopologyBinding %q", domain, topologyName)
 	}
-	return level.Key, nil
-}
-
-// ValuesForAffinity resolves the topology label key and currently known values
-// for a PodClique topology affinity rule.
-func ValuesForAffinity(ctx context.Context, cl client.Client, nodeLabels nodelabels.Cache, affinity *grovecorev1alpha1.TopologyAffinity) (string, []string, error) {
-	if affinity == nil {
-		return "", nil, nil
-	}
-	labelKey, err := KeyForDomain(ctx, cl, affinity.TopologyName, grovecorev1alpha1.TopologyDomain(affinity.Domain))
-	if err != nil {
-		return "", nil, err
-	}
-	values, err := nodeLabels.Values(ctx, labelKey)
-	if err != nil {
-		return "", nil, err
-	}
-	return labelKey, values, nil
+	return level, binding.Generation, nil
 }

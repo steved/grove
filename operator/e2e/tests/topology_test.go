@@ -1974,3 +1974,64 @@ func Test_TAS23_PreferredPackConstraintPropagation(t *testing.T) {
 
 	Logger.Info("TAS23: Preferred Pack Constraint Propagation test completed successfully!")
 }
+
+// Test_TAS24_PodCliqueTopologyAffinity verifies that one target replica is created
+// in every block occupied by the associated source clique.
+func Test_TAS24_PodCliqueTopologyAffinity(t *testing.T) {
+	ctx := context.Background()
+	const expectedPods = 4
+	tc, cleanup := testctx.PrepareTest(ctx, t, 30,
+		testctx.WithWorkload(&testctx.WorkloadConfig{
+			Name:         "topology-affinity",
+			YAMLPath:     "../yaml/topology-affinity.yaml",
+			Namespace:    "default",
+			ExpectedPods: expectedPods,
+		}),
+	)
+	defer cleanup()
+	topologyVerifier := topology.NewTopologyVerifier(tc.Client, Logger)
+	ensureGroveTopology(ctx, t, topologyVerifier)
+
+	pods, err := DeployWorkloadAndGetPods(tc, expectedPods)
+	if err != nil {
+		t.Fatalf("Failed to deploy topology-affinity workload: %v", err)
+	}
+	sourcePods := topology.FilterPodsByLabel(pods, "test.grove.io/clique", "source")
+	targetPods := topology.FilterPodsByLabel(pods, "test.grove.io/clique", "target")
+	if len(sourcePods) != 2 || len(targetPods) != 2 {
+		t.Fatalf("Expected 2 source and 2 target pods, got %d source and %d target", len(sourcePods), len(targetPods))
+	}
+
+	sourceDomains := make(map[string]struct{}, 2)
+	for _, pod := range sourcePods {
+		node := &v1.Node{}
+		if err := tc.Client.Get(ctx, client.ObjectKey{Name: pod.Spec.NodeName}, node); err != nil {
+			t.Fatalf("Failed to get source node %q: %v", pod.Spec.NodeName, err)
+		}
+		sourceDomains[node.Labels[setup.TopologyLabelBlock]] = struct{}{}
+	}
+	if len(sourceDomains) != 2 {
+		t.Fatalf("Expected sources in 2 blocks, got %v", sourceDomains)
+	}
+
+	targetCounts := make(map[string]int, 2)
+	for _, pod := range targetPods {
+		node := &v1.Node{}
+		if err := tc.Client.Get(ctx, client.ObjectKey{Name: pod.Spec.NodeName}, node); err != nil {
+			t.Fatalf("Failed to get target node %q: %v", pod.Spec.NodeName, err)
+		}
+		domain := node.Labels[setup.TopologyLabelBlock]
+		if _, ok := sourceDomains[domain]; !ok {
+			t.Fatalf("Target pod %q scheduled in block %q outside source blocks %v", pod.Name, domain, sourceDomains)
+		}
+		if assigned := pod.Annotations[nameutils.AnnotationTopologyAffinityValue]; assigned != domain {
+			t.Fatalf("Target pod %q annotation %q does not match scheduled block %q", pod.Name, assigned, domain)
+		}
+		targetCounts[domain]++
+	}
+	for domain := range sourceDomains {
+		if targetCounts[domain] != 1 {
+			t.Fatalf("Expected 1 target in block %q, got %d", domain, targetCounts[domain])
+		}
+	}
+}

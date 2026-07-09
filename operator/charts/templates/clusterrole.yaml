@@ -163,6 +163,7 @@ rules:
   - resource.k8s.io
   resources:
   - resourceclaimtemplates
+  - resourceslices
   verbs:
   - get
   - list

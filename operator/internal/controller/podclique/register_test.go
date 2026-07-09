@@ -17,6 +17,7 @@
 package podclique
 
 import (
+	"context"
 	"testing"
 
 	"github.com/ai-dynamo/grove/operator/api/common"
@@ -33,6 +34,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // TestControllerConstants tests the controller constants
@@ -75,6 +77,121 @@ func TestPodPredicate_Delete(t *testing.T) {
 			"ObserveDeletions should remove the deleted pod UID from uidsToAdd so next reconcile can recreate the pod")
 		assert.True(t, result, "predicate should allow the event so the handler enqueues reconcile")
 	})
+}
+
+func TestTopologyAffinitySourcePodPredicate(t *testing.T) {
+	const namespace, sourcePCLQName = "default", "workload-0-workers-0-source"
+	managedPod := func(nodeName string) *corev1.Pod {
+		pod := testutils.NewPodBuilder("source-0", namespace).
+			WithOwner(sourcePCLQName).
+			WithLabels(map[string]string{common.LabelManagedByKey: common.LabelManagedByValue}).
+			Build()
+		pod.Spec.NodeName = nodeName
+		return pod
+	}
+
+	pred, ok := topologyAffinitySourcePodPredicate().(predicate.Funcs)
+	require.True(t, ok, "predicate must be predicate.Funcs")
+
+	t.Run("node assignment enqueues despite pod generation change", func(t *testing.T) {
+		oldPod := managedPod("")
+		oldPod.Generation = 1
+		newPod := oldPod.DeepCopy()
+		newPod.Generation = 2
+		newPod.Spec.NodeName = "worker-a"
+
+		assert.True(t, pred.UpdateFunc(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}))
+	})
+
+	t.Run("unrelated status update does not enqueue", func(t *testing.T) {
+		oldPod := managedPod("worker-a")
+		newPod := oldPod.DeepCopy()
+		newPod.Status.Phase = corev1.PodRunning
+
+		assert.False(t, pred.UpdateFunc(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}))
+	})
+
+	t.Run("pod creation does not duplicate primary startup reconciliation", func(t *testing.T) {
+		assert.False(t, pred.CreateFunc(event.CreateEvent{Object: managedPod("worker-a")}))
+	})
+
+	t.Run("bound pod deletion enqueues", func(t *testing.T) {
+		assert.True(t, pred.DeleteFunc(event.DeleteEvent{Object: managedPod("worker-a")}))
+		assert.False(t, pred.DeleteFunc(event.DeleteEvent{Object: managedPod("")}))
+	})
+
+	t.Run("unmanaged pod does not enqueue", func(t *testing.T) {
+		oldPod := managedPod("")
+		delete(oldPod.Labels, common.LabelManagedByKey)
+		newPod := oldPod.DeepCopy()
+		newPod.Spec.NodeName = "worker-a"
+		assert.False(t, pred.UpdateFunc(event.UpdateEvent{ObjectOld: oldPod, ObjectNew: newPod}))
+	})
+}
+
+func TestMapTopologyAffinitySourcePodToDependentPCLQs(t *testing.T) {
+	const (
+		pcsName   = "workload"
+		pcsgName  = "workload-0-workers"
+		namespace = "default"
+	)
+	replicas := int32(2)
+	pcs := testutils.NewPodCliqueSetBuilder(pcsName, namespace, types.UID("pcs-uid")).
+		WithReplicas(2).
+		WithPodCliqueTemplateSpec(testutils.NewBasicPodCliqueTemplateSpec("source")).
+		WithPodCliqueTemplateSpec(testutils.NewBasicPodCliqueTemplateSpec("target")).
+		WithPodCliqueScalingGroupConfig(grovecorev1alpha1.PodCliqueScalingGroupConfig{
+			Name:         "workers",
+			CliqueNames:  []string{"source", "target"},
+			Replicas:     &replicas,
+			MinAvailable: &replicas,
+		}).
+		Build()
+
+	newPCLQ := func(pcsReplica, pcsgReplica int, cliqueName string) *grovecorev1alpha1.PodClique {
+		name := common.GeneratePodCliqueName(
+			common.ResourceNameReplica{
+				Name:    common.GeneratePodCliqueScalingGroupName(common.ResourceNameReplica{Name: pcsName, Replica: pcsReplica}, "workers"),
+				Replica: pcsgReplica,
+			},
+			cliqueName,
+		)
+		return testutils.NewPCSGPodCliqueBuilder(name, namespace, pcsName,
+			common.GeneratePodCliqueScalingGroupName(common.ResourceNameReplica{Name: pcsName, Replica: pcsReplica}, "workers"),
+			pcsReplica, pcsgReplica).
+			Build()
+	}
+
+	source0 := newPCLQ(0, 0, "source")
+	source1 := newPCLQ(0, 1, "source")
+	target0 := newPCLQ(0, 0, "target")
+	target1 := newPCLQ(0, 1, "target")
+	targetInOtherPCSReplica := newPCLQ(1, 0, "target")
+	for _, target := range []*grovecorev1alpha1.PodClique{target0, target1, targetInOtherPCSReplica} {
+		target.Spec.Affinity = &grovecorev1alpha1.PodCliqueAffinity{
+			TopologyAffinity: &grovecorev1alpha1.TopologyAffinity{CliqueNames: []string{"source"}},
+		}
+	}
+
+	cl := testutils.SetupFakeClient(pcs, source0, source1, target0, target1, targetInOtherPCSReplica)
+	r := &Reconciler{client: cl}
+	pod := testutils.NewPodBuilder("source-0", namespace).
+		WithOwner(source0.Name).
+		WithLabels(map[string]string{
+			common.LabelManagedByKey:             common.LabelManagedByValue,
+			common.LabelPartOfKey:                pcsName,
+			common.LabelPodClique:                source0.Name,
+			common.LabelPodCliqueSetReplicaIndex: "0",
+			common.LabelPodCliqueScalingGroup:    pcsgName,
+		}).
+		Build()
+	pod.Spec.NodeName = "worker-a"
+
+	requests := r.mapTopologyAffinitySourcePodToDependentPCLQs()(context.Background(), pod)
+	assert.ElementsMatch(t, []reconcile.Request{
+		{NamespacedName: types.NamespacedName{Namespace: namespace, Name: target0.Name}},
+		{NamespacedName: types.NamespacedName{Namespace: namespace, Name: target1.Name}},
+	}, requests)
 }
 
 // TestPodCliqueSetPredicateCurrentlyUpdatingReplicaChanges verifies that the PodCliqueSet

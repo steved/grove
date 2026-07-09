@@ -1014,6 +1014,14 @@ func (v *pcsValidator) validatePodCliqueUpdate(oldCliques []*grovecorev1alpha1.P
 		allErrs = append(allErrs, apivalidation.ValidateImmutableField(newClique.Spec.StartsAfter, oldIndexCliqueTuple.B.Spec.StartsAfter, cliqueFldPath.Child("startsAfter"))...)
 		allErrs = append(allErrs, apivalidation.ValidateImmutableField(newClique.Spec.PodSpec.SchedulerName, oldIndexCliqueTuple.B.Spec.PodSpec.SchedulerName, cliqueFldPath.Child("podSpec", "schedulerName"))...)
 		allErrs = append(allErrs, apivalidation.ValidateImmutableField(newClique.ResourceSharing, oldIndexCliqueTuple.B.ResourceSharing, fldPath.Index(newCliqueIndex).Child("resourceSharing"))...)
+		var oldTopologyAffinity, newTopologyAffinity *grovecorev1alpha1.TopologyAffinity
+		if oldIndexCliqueTuple.B.Spec.Affinity != nil {
+			oldTopologyAffinity = oldIndexCliqueTuple.B.Spec.Affinity.TopologyAffinity
+		}
+		if newClique.Spec.Affinity != nil {
+			newTopologyAffinity = newClique.Spec.Affinity.TopologyAffinity
+		}
+		allErrs = append(allErrs, apivalidation.ValidateImmutableField(newTopologyAffinity, oldTopologyAffinity, cliqueFldPath.Child("affinity", "topologyAffinity"))...)
 		allErrs = append(allErrs, v.validatePodCliqueTopologyAffinity(newClique, fldPath.Index(newCliqueIndex))...)
 	}
 	allErrs = append(allErrs, validateTopologyAffinityDependencies(newCliques, fldPath)...)

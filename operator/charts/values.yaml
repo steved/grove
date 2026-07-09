@@ -106,6 +106,8 @@ config:
   logFormat: json
   topologyAwareScheduling:
     enabled: false
+  featureGates:
+    podCliqueTopologyAffinity: false
   authorizer:
     enabled: false
     exemptServiceAccountUserNames:

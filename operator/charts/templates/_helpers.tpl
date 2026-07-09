@@ -59,6 +59,10 @@ config.yaml: |
   topologyAwareScheduling:
     enabled: {{ .Values.config.topologyAwareScheduling.enabled }}
   {{- end }}
+  {{- if .Values.config.featureGates }}
+  featureGates:
+    podCliqueTopologyAffinity: {{ .Values.config.featureGates.podCliqueTopologyAffinity | default false }}
+  {{- end }}
   {{- if .Values.config.authorizer.enabled }}
   authorizer:
     enabled: {{ .Values.config.authorizer.enabled }}

@@ -288,6 +288,22 @@ PodClique is a set of pods running the same image.
 | `status` _[PodCliqueStatus](#podcliquestatus)_ | Status defines the status of a PodClique. |  |  |
 
 
+#### PodCliqueAffinity
+
+
+
+PodCliqueAffinity is a group of affinity scheduling rules for a PodClique.
+
+
+
+_Appears in:_
+- [PodCliqueSpec](#podcliquespec)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `topologyAffinity` _[TopologyAffinity](#topologyaffinity)_ | Describes PodClique topology affinity rules.<br />This clique's pods are placed the same topology domain as the referenced clique. |  |  |
+
+
 #### PodCliqueScalingGroup
 
 
@@ -582,6 +598,7 @@ _Appears in:_
 | `minAvailable` _integer_ | MinAvailable serves two purposes:<br />1. It defines the minimum number of pods that are guaranteed to be gang scheduled.<br />2. It defines the minimum requirement of available pods in a PodClique. Violation of this threshold will result<br />in termination of the PodGang that it belongs to. If MinAvailable is not set, then it will default to the template<br />Replicas. |  |  |
 | `startsAfter` _string array_ | StartsAfter provides you a way to explicitly define the startup dependencies amongst cliques.<br />If CliqueStartupType in PodGang has been set to 'CliqueStartupTypeExplicit', then to create an ordered start<br />amongst PodClique's StartsAfter can be used. A forest of DAG's can be defined to model any start order dependencies.<br />If there are more than one PodClique's defined and StartsAfter is not set for any of them, then their startup order<br />is random at best and must not be relied upon.<br />Validations:<br />1. If a StartsAfter has been defined and one or more cycles are detected in DAG's then it will be flagged as validation error.<br />2. If StartsAfter is defined and does not identify any PodClique then it will be flagged as a validation error. |  |  |
 | `autoScalingConfig` _[AutoScalingConfig](#autoscalingconfig)_ | ScaleConfig is the horizontal pod autoscaler configuration for a PodClique. |  |  |
+| `affinity` _[PodCliqueAffinity](#podcliqueaffinity)_ | Affinity is a group of affinity scheduling rules for a PodClique. |  |  |
 
 
 #### PodCliqueStatus
@@ -599,10 +616,12 @@ _Appears in:_
 | --- | --- | --- | --- |
 | `observedGeneration` _integer_ | ObservedGeneration is the most recent generation observed by the controller. |  |  |
 | `lastErrors` _[LastError](#lasterror) array_ | LastErrors captures the last errors observed by the controller when reconciling the PodClique. |  |  |
-| `replicas` _integer_ | Replicas is the total number of non-terminated Pods targeted by this PodClique. |  |  |
+| `replicas` _integer_ | Replicas is the replica count exposed through the scale subresource.<br />For topology-affinity PodCliques, this matches Spec.Replicas so autoscalers scale per-domain replicas.<br />Use TotalReplicas for the total non-terminated Pod count across all topology domains. |  |  |
+| `totalReplicas` _integer_ | TotalReplicas is the total number of non-terminated Pods targeted by this PodClique.<br />For topology-affinity PodCliques, this is the expanded count across all topology domains. |  |  |
+| `topologyAffinity` _[PodCliqueTopologyAffinityStatus](#podcliquetopologyaffinitystatus)_ | TopologyAffinity captures the resolved topology-affinity state used by controllers that need to size or gate<br />topology-affinity PodCliques without directly reading Node labels. |  |  |
 | `readyReplicas` _integer_ | ReadyReplicas is the number of ready Pods targeted by this PodClique. | 0 |  |
 | `updatedReplicas` _integer_ | UpdatedReplicas is the number of Pods that have been updated and are at the desired revision of the PodClique. | 0 |  |
-| `scheduleGatedReplicas` _integer_ | ScheduleGatedReplicas is the number of Pods that have been created with one or more scheduling gate(s) set.<br />Sum of ReadyReplicas and ScheduleGatedReplicas will always be <= Replicas. | 0 |  |
+| `scheduleGatedReplicas` _integer_ | ScheduleGatedReplicas is the number of Pods that have been created with one or more scheduling gate(s) set. | 0 |  |
 | `scheduledReplicas` _integer_ | ScheduledReplicas is the number of Pods that have been scheduled by the backend scheduler. | 0 |  |
 | `hpaPodSelector` _string_ | Selector is the label selector that determines which pods are part of the PodClique.<br />PodClique is a unit of scale and this selector is used by HPA to scale the PodClique based on metrics captured<br />for the pods that match this selector. |  |  |
 | `conditions` _[Condition](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#condition-v1-meta) array_ | Conditions represents the latest available observations of the clique by its controller. |  |  |
@@ -630,6 +649,26 @@ _Appears in:_
 | `topologyConstraint` _[TopologyConstraint](#topologyconstraint)_ | TopologyConstraint defines topology placement requirements for PodClique.<br />Must be equal to or stricter than parent resource constraints. |  |  |
 | `resourceSharing` _[ResourceSharingSpec](#resourcesharingspec) array_ | ResourceSharing defines shared ResourceClaims for this PodClique.<br />Each entry references a template (internal or external) and specifies a Scope:<br />  - AllReplicas: one RC per PCLQ, shared by all replica pods<br />  - PerReplica: one RC per PCLQ replica, shared by all pods within that replica<br />This is distinct from adding ResourceClaimTemplate inside<br />Spec.PodSpec.ResourceClaims[x].ResourceClaimTemplateName, which creates a unique<br />ResourceClaim for each pod.<br />PCLQs have no children to filter, so no Filter field is available. |  |  |
 | `spec` _[PodCliqueSpec](#podcliquespec)_ | Specification of the desired behavior of a PodClique.<br />More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#spec-and-status |  |  |
+
+
+#### PodCliqueTopologyAffinityStatus
+
+
+
+PodCliqueTopologyAffinityStatus captures the resolved topology-affinity state for a PodClique.
+
+
+
+_Appears in:_
+- [PodCliqueStatus](#podcliquestatus)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `observedTopologyBindingGeneration` _integer_ | ObservedTopologyBindingGeneration is the ClusterTopologyBinding generation<br />last accepted for a complete topology resolution. |  |  |
+| `allDomains` _string array_ | AllDomains is the set of domains currently capable of hosting a constrained candidate. |  |  |
+| `associatedDomains` _string array_ | AssociatedDomains is the set of topology domains used by associated PodCliques. |  |  |
+| `targetDomains` _string array_ | TargetDomains is the set of topology domains this PodClique should currently occupy. |  |  |
+| `associatedReady` _boolean_ | AssociatedReady indicates whether all associated PodCliques have reached their scheduled minimum. |  |  |
 
 
 #### PodCliqueUpdateProgress
@@ -769,6 +808,23 @@ _Appears in:_
 | `scope` _[ResourceSharingScope](#resourcesharingscope)_ | Scope determines the sharing granularity for the ResourceClaims created from<br />this template. |  | Enum: [AllReplicas PerReplica] <br /> |
 
 
+#### ResourceSliceAttributeReference
+
+
+
+ResourceSliceAttributeReference identifies one driver's representation of a topology domain.
+
+
+
+_Appears in:_
+- [TopologyLevel](#topologylevel)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `driver` _string_ | Driver is the driver name published in ResourceSlice.spec.driver. |  |  |
+| `name` _[FullyQualifiedName](https://kubernetes.io/docs/reference/generated/kubernetes-api/v1.33/#fullyqualifiedname-v1-resource)_ | Name is the fully qualified device attribute name. |  |  |
+
+
 #### SchedulerTopologyBinding
 
 
@@ -809,6 +865,24 @@ _Appears in:_
 | `message` _string_ | Message provides detail when InSync is false. |  |  |
 
 
+#### TopologyAffinity
+
+
+
+TopologyAffinity defines PodClique topology affinity rules.
+
+
+
+_Appears in:_
+- [PodCliqueAffinity](#podcliqueaffinity)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `topologyName` _string_ | TopologyName is the name of the ClusterTopologyBinding resource to use for topology-aware scheduling.<br />If topologyAffinity is set, topologyName and domain must both be specified. |  |  |
+| `domain` _[TopologyDomain](#topologydomain)_ | Domain specifies the topology domain for creating affine replicas.<br />Must reference a domain in the topology levels defined in the ClusterTopology CR name as set in TopologyName.<br />Example: "rack" means replicas placed within all racks that the dependent cliqueNames are scheduled in. |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^[a-z][a-z0-9-]*$` <br /> |
+| `cliqueNames` _string array_ | CliqueNames is the list of names of the PodCliques that are part of the affinity group.<br />Pods are scheduled at the union of all scheduled PodClique domains. |  |  |
+
+
 #### TopologyConstraint
 
 
@@ -842,6 +916,7 @@ _Validation:_
 - Pattern: `^[a-z][a-z0-9-]*$`
 
 _Appears in:_
+- [TopologyAffinity](#topologyaffinity)
 - [TopologyConstraint](#topologyconstraint)
 - [TopologyLevel](#topologylevel)
 - [TopologyPackConstraint](#topologypackconstraint)
@@ -861,9 +936,7 @@ _Appears in:_
 
 
 
-TopologyLevel defines one level in Grove's source-of-truth topology hierarchy.
-Each level maps a Grove topology domain to the node label key that a backend
-topology representation should use for that level.
+TopologyLevel maps one logical topology domain to its infrastructure representations.
 
 
 
@@ -873,7 +946,8 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `domain` _[TopologyDomain](#topologydomain)_ | Domain is a platform provider-agnostic level identifier. |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^[a-z][a-z0-9-]*$` <br />Required: \{\} <br /> |
-| `key` _string_ | Key is the node label key that identifies this topology domain.<br />Must be a valid Kubernetes label key (qualified name).<br />Examples: "topology.kubernetes.io/zone", "kubernetes.io/hostname" |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]/)?([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$` <br />Required: \{\} <br /> |
+| `key` _string_ | Key is the node label key that identifies this topology domain and is used<br />for all topology-affinity Pod placement.<br />Must be a valid Kubernetes label key (qualified name).<br />Examples: "topology.kubernetes.io/zone", "kubernetes.io/hostname" |  | MaxLength: 63 <br />MinLength: 1 <br />Pattern: `^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]/)?([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$` <br />Required: \{\} <br /> |
+| `resourceSliceAttributes` _[ResourceSliceAttributeReference](#resourcesliceattributereference) array_ | ResourceSliceAttributes maps DRA drivers to the device attribute that<br />carries this domain's canonical string value for resolving associated<br />Pods with allocated devices. These attributes do not control Pod placement. |  |  |
 
 
 #### TopologyPackConstraint
@@ -1006,6 +1080,22 @@ _Appears in:_
 | `enableProfiling` _boolean_ | EnableProfiling enables profiling via host:port/debug/pprof/ endpoints. |  |  |
 | `pprofBindHost` _string_ | PprofBindHost is the host/IP that the pprof HTTP server binds to.<br />Defaults to 127.0.0.1 (loopback-only). Set to 0.0.0.0 to allow external<br />scraping (e.g. Pyroscope). Supports IPv6 addresses (e.g. "::1"). |  |  |
 | `pprofBindPort` _integer_ | PprofBindPort is the port that the pprof HTTP server binds to.<br />Defaults to 2753. |  |  |
+
+
+#### FeatureGateConfiguration
+
+
+
+FeatureGateConfiguration controls alpha Grove features.
+
+
+
+_Appears in:_
+- [OperatorConfiguration](#operatorconfiguration)
+
+| Field | Description | Default | Validation |
+| --- | --- | --- | --- |
+| `podCliqueTopologyAffinity` _boolean_ | PodCliqueTopologyAffinity enables topologyAffinity on PodClique templates. |  |  |
 
 
 

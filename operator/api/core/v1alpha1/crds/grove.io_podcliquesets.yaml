@@ -185,10 +185,13 @@ spec:
                                         Domain specifies the topology domain for creating affine replicas.
                                         Must reference a domain in the topology levels defined in the ClusterTopology CR name as set in TopologyName.
                                         Example: "rack" means replicas placed within all racks that the dependent cliqueNames are scheduled in.
+                                      maxLength: 63
+                                      minLength: 1
+                                      pattern: ^[a-z][a-z0-9-]*$
                                       type: string
                                     topologyName:
                                       description: |-
-                                        TopologyName is the name of the ClusterTopology resource to use for topology-aware scheduling.
+                                        TopologyName is the name of the ClusterTopologyBinding resource to use for topology-aware scheduling.
                                         If topologyAffinity is set, topologyName and domain must both be specified.
                                       type: string
                                   required:

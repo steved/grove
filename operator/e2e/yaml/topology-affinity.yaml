@@ -1,0 +1,89 @@
+apiVersion: grove.io/v1alpha1
+kind: PodCliqueSet
+metadata:
+  name: topology-affinity
+spec:
+  replicas: 1
+  template:
+    terminationDelay: 1m
+    podCliqueScalingGroups:
+      - name: workers
+        replicas: 1
+        minAvailable: 1
+        cliqueNames:
+          - source
+          - target
+    cliques:
+      - name: source
+        labels:
+          kai.scheduler/queue: test
+          test.grove.io/clique: source
+        spec:
+          roleName: source
+          replicas: 2
+          minAvailable: 2
+          podSpec:
+            schedulerName: kai-scheduler
+            terminationGracePeriodSeconds: 5
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node_role.e2e.grove.nvidia.com
+                          operator: In
+                          values: [agent]
+              podAntiAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  - labelSelector:
+                      matchLabels:
+                        test.grove.io/clique: source
+                    topologyKey: kubernetes.io/block
+            tolerations:
+              - key: node_role.e2e.grove.nvidia.com
+                operator: Equal
+                value: agent
+                effect: NoSchedule
+            containers:
+              - name: source
+                image: registry:5001/busybox:latest
+                command: ["sleep", "infinity"]
+                resources:
+                  requests:
+                    memory: 10Mi
+      - name: target
+        labels:
+          kai.scheduler/queue: test
+          test.grove.io/clique: target
+        spec:
+          roleName: target
+          replicas: 1
+          minAvailable: 1
+          affinity:
+            topologyAffinity:
+              topologyName: grove-topology
+              domain: block
+              cliqueNames: [source]
+          podSpec:
+            schedulerName: kai-scheduler
+            terminationGracePeriodSeconds: 5
+            affinity:
+              nodeAffinity:
+                requiredDuringSchedulingIgnoredDuringExecution:
+                  nodeSelectorTerms:
+                    - matchExpressions:
+                        - key: node_role.e2e.grove.nvidia.com
+                          operator: In
+                          values: [agent]
+            tolerations:
+              - key: node_role.e2e.grove.nvidia.com
+                operator: Equal
+                value: agent
+                effect: NoSchedule
+            containers:
+              - name: target
+                image: registry:5001/busybox:latest
+                command: ["sleep", "infinity"]
+                resources:
+                  requests:
+                    memory: 10Mi

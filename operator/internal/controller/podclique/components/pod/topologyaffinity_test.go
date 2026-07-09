@@ -23,6 +23,7 @@ import (
 	apicommon "github.com/ai-dynamo/grove/operator/api/common"
 	apiconstants "github.com/ai-dynamo/grove/operator/api/common/constants"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
+	commontopology "github.com/ai-dynamo/grove/operator/internal/controller/common/topology"
 	"github.com/ai-dynamo/grove/operator/internal/expect"
 
 	"github.com/go-logr/logr"
@@ -52,7 +53,7 @@ func TestAddTopologyNodeAffinity(t *testing.T) {
 		},
 	}
 
-	addTopologyNodeAffinity("domain", "topology.grove.io/block", "fabric-a")(pod)
+	addTopologyNodeAffinity("domain", &commontopology.PodCliqueTopologyAffinityState{LabelKey: "topology.grove.io/block"}, "fabric-a")(pod)
 
 	terms := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
 	assert.Len(t, terms, 1)
@@ -100,9 +101,9 @@ func TestCreateTopologyAffinityPodsWaitsForCreateExpectations(t *testing.T) {
 		pcs:                      pcs,
 		pclq:                     pclq,
 		pclqExpectationsStoreKey: expectationsKey,
-		topologyAffinity: &grovecorev1alpha1.PodCliqueTopologyAffinityStatus{
-			LabelKey:      "topology.grove.io/fabric-pod",
-			TargetDomains: []string{"fabric-a"},
+		topologyAffinity: &commontopology.PodCliqueTopologyAffinityState{
+			PodCliqueTopologyAffinityStatus: &grovecorev1alpha1.PodCliqueTopologyAffinityStatus{TargetDomains: []string{"fabric-a"}},
+			LabelKey:                        "topology.grove.io/fabric-pod",
 		},
 	}
 

@@ -29,6 +29,7 @@ import (
 	"github.com/go-logr/logr"
 	admissionv1 "k8s.io/api/admission/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -48,6 +49,7 @@ type Handler struct {
 	client          client.Client
 	tasConfig       configv1alpha1.TopologyAwareSchedulingConfiguration
 	networkConfig   configv1alpha1.NetworkAcceleration
+	featureGates    configv1alpha1.FeatureGateConfiguration
 	schedulerConfig configv1alpha1.SchedulerConfiguration
 	schedRegistry   scheduler.Registry
 }
@@ -61,6 +63,7 @@ func NewHandler(mgr manager.Manager, operatorCfg *configv1alpha1.OperatorConfigu
 		client:          mgr.GetClient(),
 		tasConfig:       operatorCfg.TopologyAwareScheduling,
 		networkConfig:   operatorCfg.Network,
+		featureGates:    operatorCfg.FeatureGates,
 		schedulerConfig: operatorCfg.Scheduler,
 		schedRegistry:   schedRegistry,
 	}
@@ -76,6 +79,9 @@ func (h *Handler) ValidateCreate(ctx context.Context, obj runtime.Object) (admis
 
 	v := newPCSValidator(pcs, admissionv1.Create, h.tasConfig, h.schedulerConfig, h.client, h.schedRegistry)
 	var allErrs field.ErrorList
+	if !h.featureGates.PodCliqueTopologyAffinity && topologyAffinityCliqueNames(pcs).Len() > 0 {
+		allErrs = append(allErrs, field.Forbidden(field.NewPath("spec", "template", "cliques"), "topologyAffinity requires the PodCliqueTopologyAffinity feature gate"))
+	}
 	topologyWarnings, topologyErrs := v.validateTopologyConstraintsOnCreate(ctx)
 	allErrs = append(allErrs, topologyErrs...)
 	warnings, errs := v.validate()
@@ -110,6 +116,9 @@ func (h *Handler) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Obj
 
 	v := newPCSValidator(newPCS, admissionv1.Update, h.tasConfig, h.schedulerConfig, h.client, h.schedRegistry, admissionSubResource(ctx))
 	warnings, errs := v.validate()
+	if !h.featureGates.PodCliqueTopologyAffinity && topologyAffinityCliqueNames(newPCS).Difference(topologyAffinityCliqueNames(oldPCS)).Len() > 0 {
+		errs = append(errs, field.Forbidden(field.NewPath("spec", "template", "cliques"), "topologyAffinity requires the PodCliqueTopologyAffinity feature gate"))
+	}
 
 	// Validate MNNVL annotation immutability on PCS metadata and spec (clique templates)
 	errs = append(errs, mnnvl.ValidatePCSOnUpdate(oldPCS, newPCS)...)
@@ -125,6 +134,16 @@ func (h *Handler) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Obj
 	updateWarnings := newTopologyConstraintsValidator(newPCS, h.tasConfig.Enabled, nil).updateWarnings()
 	warnings = append(warnings, updateWarnings...)
 	return warnings, v.validateUpdate(oldPCS)
+}
+
+func topologyAffinityCliqueNames(pcs *v1alpha1.PodCliqueSet) sets.Set[string] {
+	names := sets.New[string]()
+	for _, clique := range pcs.Spec.Template.Cliques {
+		if clique.Spec.Affinity != nil && clique.Spec.Affinity.TopologyAffinity != nil {
+			names.Insert(clique.Name)
+		}
+	}
+	return names
 }
 
 // ValidateDelete validates a PodCliqueSet delete request.
