@@ -63,14 +63,23 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, logger logr.Logger, pc
 
 	podCategories := k8sutils.CategorizePodsByConditionType(logger, existingPods)
 
-	topologyAffinityStatus, err := commontopology.ResolvePodCliqueTopologyAffinityStatus(ctx, r.client, r.nodeLabels, pcs, pclq)
+	topologyAffinity, err := commontopology.ResolvePodCliqueTopologyAffinity(ctx, r.client, r.topologyResolver, pcs, pclq)
 	if err != nil {
 		logger.Error(err, "failed to resolve PodClique topology affinity state")
+		if pclq.Spec.Affinity != nil && pclq.Spec.Affinity.TopologyAffinity != nil {
+			if patchErr := r.patchTopologyAffinityFailure(ctx, pclq, constants.ConditionReasonTopologyUnavailable, err.Error(), false); patchErr != nil {
+				return ctrlcommon.ReconcileWithErrors("failed to record unavailable PodClique topology", err, patchErr)
+			}
+		}
 		return ctrlcommon.ReconcileWithErrors("failed to resolve PodClique topology affinity state", err)
 	}
 	// mutate PodClique Status Replicas, ReadyReplicas, ScheduleGatedReplicas and UpdatedReplicas.
-	mutateReplicas(pclq, podCategories, len(existingPods), topologyAffinityStatus != nil)
-	mutateTopologyAffinityStatus(pclq, topologyAffinityStatus)
+	mutateReplicas(pclq, podCategories, len(existingPods), topologyAffinity != nil)
+	if topologyAffinity != nil {
+		mutateTopologyAffinityStatus(pclq, topologyAffinity.PodCliqueTopologyAffinityStatus)
+	} else {
+		mutateTopologyAffinityStatus(pclq, nil)
+	}
 	mutateUpdatedReplica(pclq, existingPods)
 	// mutate PodClique.Status.CurrentPodTemplateHash and PodClique.Status.CurrentPodCliqueSetGenerationHash
 	if err = mutateCurrentHashes(logger, pcs, pclq); err != nil {
@@ -86,7 +95,11 @@ func (r *Reconciler) reconcileStatus(ctx context.Context, logger logr.Logger, pc
 			len(podCategories[k8sutils.PodHasAtleastOneContainerWithNonZeroExitCode]),
 			len(podCategories[k8sutils.PodStartedButNotReady]))
 		r.emitAllScheduledReplicasLostIfNeeded(pclq, originalStatus.ScheduledReplicas)
-		mutateTopologyAffinityReadyCondition(pclq, topologyAffinityStatus, existingPods)
+		if topologyAffinity != nil {
+			mutateTopologyAffinityReadyCondition(pclq, topologyAffinity.PodCliqueTopologyAffinityStatus, existingPods)
+		} else {
+			mutateTopologyAffinityReadyCondition(pclq, nil, existingPods)
+		}
 	}
 
 	// mutate the selector that will be used by an autoscaler.
@@ -362,7 +375,7 @@ func computeTopologyAffinityReadyCondition(pclq *grovecorev1alpha1.PodClique, st
 		return metav1.Condition{
 			Type:               constants.ConditionTopologyAffinityReady,
 			Status:             metav1.ConditionFalse,
-			Reason:             constants.ConditionReasonInsufficientScheduledPods,
+			Reason:             constants.ConditionReasonAssociatedCliquesNotReady,
 			Message:            "Associated PodCliques have not reached their scheduled minimum",
 			LastTransitionTime: now,
 		}
@@ -376,7 +389,7 @@ func computeTopologyAffinityReadyCondition(pclq *grovecorev1alpha1.PodClique, st
 		if pod.DeletionTimestamp != nil {
 			continue
 		}
-		value := pod.Labels[apicommon.LabelTopologyAffinityValue]
+		value := pod.Annotations[apicommon.AnnotationTopologyAffinityValue]
 		if _, ok := targetDomains[value]; !ok {
 			return metav1.Condition{
 				Type:               constants.ConditionTopologyAffinityReady,

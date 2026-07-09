@@ -140,6 +140,7 @@ class GroveConfig(BaseModel):
     Attributes:
         enabled: Deploy Grove operator.
         profiling: Enable pprof on the Grove operator.
+        podclique_topology_affinity: Enable the alpha PodClique topology-affinity feature.
         pcs_syncs: PodCliqueSet concurrent syncs override, or None.
         pclq_syncs: PodClique concurrent syncs override, or None.
         pcsg_syncs: PodCliqueScalingGroup concurrent syncs override, or None.
@@ -155,6 +156,7 @@ class GroveConfig(BaseModel):
 
     enabled: bool = True
     profiling: bool = False
+    podclique_topology_affinity: bool = False
     pcs_syncs: int | None = None
     pclq_syncs: int | None = None
     pcsg_syncs: int | None = None

@@ -25,6 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -79,6 +80,23 @@ func TestValidateCreate(t *testing.T) {
 				{Domain: grovecorev1alpha1.TopologyDomainHost, Key: "kubernetes.io/hostname"},
 			},
 			expectError: false,
+		},
+		{
+			name: "resource slice evidence",
+			levels: []grovecorev1alpha1.TopologyLevel{{
+				Domain: grovecorev1alpha1.TopologyDomainBlock,
+				Key:    "topology.grove.io/block",
+				ResourceSliceAttributes: []grovecorev1alpha1.ResourceSliceAttributeReference{{
+					Driver: "devices.example.com",
+					Name:   resourcev1.FullyQualifiedName("network.example.com/block"),
+				}},
+			}},
+		},
+		{
+			name:        "missing key",
+			levels:      []grovecorev1alpha1.TopologyLevel{{Domain: grovecorev1alpha1.TopologyDomainBlock}},
+			expectError: true,
+			errContains: "spec.levels[0].key",
 		},
 		{
 			name: "valid scheduler topology reference",

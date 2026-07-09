@@ -101,17 +101,12 @@ func (b *schedulerBackend) OnTopologyDelete(_ context.Context, _ client.Client, 
 }
 
 func buildKAITopology(name string, clusterTopology *grovecorev1alpha1.ClusterTopologyBinding, scheme *runtime.Scheme) (*kaitopologyv1alpha1.Topology, error) {
-	kaiTopologyLevels := lo.Map(clusterTopology.Spec.Levels, func(clusterTopologyLevel grovecorev1alpha1.TopologyLevel, _ int) kaitopologyv1alpha1.TopologyLevel {
-		return kaitopologyv1alpha1.TopologyLevel{
-			NodeLabel: clusterTopologyLevel.Key,
-		}
-	})
 	kaiTopology := &kaitopologyv1alpha1.Topology{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
 		},
 		Spec: kaitopologyv1alpha1.TopologySpec{
-			Levels: kaiTopologyLevels,
+			Levels: nodeLabelTopologyLevels(clusterTopology.Spec.Levels),
 		},
 	}
 	if err := controllerutil.SetControllerReference(clusterTopology, kaiTopology, scheme); err != nil {
@@ -127,10 +122,12 @@ func isKAITopologyChanged(oldTopology, newTopology *kaitopologyv1alpha1.Topology
 // desiredKAITopologyLevels converts ClusterTopologyBinding levels to KAI topology levels.
 // Used for drift comparison without constructing a full KAI Topology object with owner references.
 func desiredKAITopologyLevels(ct *grovecorev1alpha1.ClusterTopologyBinding) []kaitopologyv1alpha1.TopologyLevel {
-	return lo.Map(ct.Spec.Levels, func(level grovecorev1alpha1.TopologyLevel, _ int) kaitopologyv1alpha1.TopologyLevel {
-		return kaitopologyv1alpha1.TopologyLevel{
-			NodeLabel: level.Key,
-		}
+	return nodeLabelTopologyLevels(ct.Spec.Levels)
+}
+
+func nodeLabelTopologyLevels(levels []grovecorev1alpha1.TopologyLevel) []kaitopologyv1alpha1.TopologyLevel {
+	return lo.FilterMap(levels, func(level grovecorev1alpha1.TopologyLevel, _ int) (kaitopologyv1alpha1.TopologyLevel, bool) {
+		return kaitopologyv1alpha1.TopologyLevel{NodeLabel: level.Key}, level.Key != ""
 	})
 }
 

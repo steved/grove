@@ -65,6 +65,25 @@ func (v *pcsValidator) validatePodCliqueTopologyAffinity(clique *grovecorev1alph
 			allErrs = append(allErrs, field.Invalid(affinityPath.Child("cliqueNames").Index(i), cliqueName, "topologyAffinity cannot refer to its own PodClique"))
 		}
 	}
+	groupName := ""
+	for _, group := range v.pcs.Spec.Template.PodCliqueScalingGroupConfigs {
+		if slicesContains(group.CliqueNames, clique.Name) {
+			groupName = group.Name
+			break
+		}
+	}
+	if groupName == "" {
+		allErrs = append(allErrs, field.Invalid(affinityPath, affinity, "topologyAffinity PodClique must belong to a PodCliqueScalingGroup"))
+	} else {
+		for i, cliqueName := range affinity.CliqueNames {
+			inSameGroup := lo.SomeBy(v.pcs.Spec.Template.PodCliqueScalingGroupConfigs, func(group grovecorev1alpha1.PodCliqueScalingGroupConfig) bool {
+				return group.Name == groupName && slicesContains(group.CliqueNames, cliqueName)
+			})
+			if !inSameGroup {
+				allErrs = append(allErrs, field.Invalid(affinityPath.Child("cliqueNames").Index(i), cliqueName, "associated PodClique must belong to the same PodCliqueScalingGroup"))
+			}
+		}
+	}
 
 	if clique.Spec.MinAvailable != nil && *clique.Spec.MinAvailable != clique.Spec.Replicas && !v.isScaleUpdateAboveMinAvailable(clique) {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("spec", "minAvailable"), *clique.Spec.MinAvailable, "minAvailable must equal replicas when topologyAffinity is set"))
@@ -73,11 +92,11 @@ func (v *pcsValidator) validatePodCliqueTopologyAffinity(clique *grovecorev1alph
 	if affinity.TopologyName == "" || affinity.Domain == "" {
 		return allErrs
 	}
-	labelKey, errs := v.resolveTopologyAffinityLabelKey(context.Background(), affinity, affinityPath)
+	level, errs := v.resolveTopologyAffinityLevel(context.Background(), affinity, affinityPath)
 	if len(errs) > 0 {
 		return append(allErrs, errs...)
 	}
-	allErrs = append(allErrs, validateTopologyAffinityNodeSelectorConflict(clique.Spec.PodSpec, labelKey, fldPath.Child("spec", "podSpec"))...)
+	allErrs = append(allErrs, validateTopologyAffinityNodeSelectorConflict(clique.Spec.PodSpec, level.Key, fldPath.Child("spec", "podSpec"))...)
 	return allErrs
 }
 
@@ -88,30 +107,33 @@ func (v *pcsValidator) isScaleUpdateAboveMinAvailable(clique *grovecorev1alpha1.
 		*clique.Spec.MinAvailable < clique.Spec.Replicas
 }
 
-func (v *pcsValidator) resolveTopologyAffinityLabelKey(ctx context.Context, affinity *grovecorev1alpha1.TopologyAffinity, fldPath *field.Path) (string, field.ErrorList) {
+func (v *pcsValidator) resolveTopologyAffinityLevel(ctx context.Context, affinity *grovecorev1alpha1.TopologyAffinity, fldPath *field.Path) (grovecorev1alpha1.TopologyLevel, field.ErrorList) {
 	levels, err := clustertopology.GetClusterTopologyLevels(ctx, v.client, affinity.TopologyName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return "", field.ErrorList{field.Invalid(fldPath.Child("topologyName"), affinity.TopologyName,
-				fmt.Sprintf("ClusterTopology %q not found", affinity.TopologyName))}
+			return grovecorev1alpha1.TopologyLevel{}, field.ErrorList{field.Invalid(fldPath.Child("topologyName"), affinity.TopologyName,
+				fmt.Sprintf("ClusterTopologyBinding %q not found", affinity.TopologyName))}
 		}
-		return "", field.ErrorList{field.InternalError(fldPath.Child("topologyName"),
-			fmt.Errorf("failed to fetch ClusterTopology %q: %w", affinity.TopologyName, err))}
+		return grovecorev1alpha1.TopologyLevel{}, field.ErrorList{field.InternalError(fldPath.Child("topologyName"),
+			fmt.Errorf("failed to fetch ClusterTopologyBinding %q: %w", affinity.TopologyName, err))}
 	}
 	level, ok := lo.Find(levels, func(level grovecorev1alpha1.TopologyLevel) bool {
-		return level.Domain == grovecorev1alpha1.TopologyDomain(affinity.Domain)
+		return level.Domain == affinity.Domain
 	})
 	if !ok {
 		domains := lo.Map(levels, func(level grovecorev1alpha1.TopologyLevel, _ int) string {
 			return string(level.Domain)
 		})
-		return "", field.ErrorList{field.Invalid(fldPath.Child("domain"), affinity.Domain,
-			fmt.Sprintf("topology domain %q does not exist in ClusterTopology %q; valid domains: %s", affinity.Domain, affinity.TopologyName, strings.Join(domains, ", ")))}
+		return grovecorev1alpha1.TopologyLevel{}, field.ErrorList{field.Invalid(fldPath.Child("domain"), affinity.Domain,
+			fmt.Sprintf("topology domain %q does not exist in ClusterTopologyBinding %q; valid domains: %s", affinity.Domain, affinity.TopologyName, strings.Join(domains, ", ")))}
 	}
-	return level.Key, nil
+	return level, nil
 }
 
 func validateTopologyAffinityNodeSelectorConflict(podSpec corev1.PodSpec, labelKey string, fldPath *field.Path) field.ErrorList {
+	if labelKey == "" {
+		return nil
+	}
 	allErrs := field.ErrorList{}
 	if _, ok := podSpec.NodeSelector[labelKey]; ok {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("nodeSelector"), labelKey, "nodeSelector conflicts with topologyAffinity on the same node label key"))
@@ -148,15 +170,22 @@ func validateTopologyAffinityNodeSelectorConflict(podSpec corev1.PodSpec, labelK
 func validateTopologyAffinityDependencies(cliques []*grovecorev1alpha1.PodCliqueTemplateSpec, fldPath *field.Path) field.ErrorList {
 	depG := NewPodCliqueDependencyGraph()
 	var discoveredCliqueNames []string
-	for _, clique := range cliques {
+	var topologyName string
+	allErrs := field.ErrorList{}
+	for i, clique := range cliques {
 		discoveredCliqueNames = append(discoveredCliqueNames, clique.Name)
 		if clique.Spec.Affinity == nil || clique.Spec.Affinity.TopologyAffinity == nil {
 			continue
 		}
-		depG.AddDependencies(clique.Name, clique.Spec.Affinity.TopologyAffinity.CliqueNames)
+		affinity := clique.Spec.Affinity.TopologyAffinity
+		depG.AddDependencies(clique.Name, affinity.CliqueNames)
+		if topologyName == "" {
+			topologyName = affinity.TopologyName
+		} else if affinity.TopologyName != topologyName {
+			allErrs = append(allErrs, field.Invalid(fldPath.Index(i).Child("spec", "affinity", "topologyAffinity", "topologyName"), affinity.TopologyName, "all topologyAffinity rules must use the same ClusterTopologyBinding"))
+		}
 	}
 
-	allErrs := field.ErrorList{}
 	unknownCliqueNames := depG.GetUnknownCliques(discoveredCliqueNames)
 	if len(unknownCliqueNames) > 0 {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("spec", "affinity", "topologyAffinity", "cliqueNames"),

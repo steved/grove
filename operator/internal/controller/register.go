@@ -23,11 +23,11 @@ import (
 	configv1alpha1 "github.com/ai-dynamo/grove/operator/api/config/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/internal/controller/clustertopology"
 	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
-	"github.com/ai-dynamo/grove/operator/internal/controller/nodelabels"
 	"github.com/ai-dynamo/grove/operator/internal/controller/podclique"
 	"github.com/ai-dynamo/grove/operator/internal/controller/podcliquescalinggroup"
 	"github.com/ai-dynamo/grove/operator/internal/controller/podcliqueset"
 	"github.com/ai-dynamo/grove/operator/internal/controller/podgang"
+	"github.com/ai-dynamo/grove/operator/internal/controller/topologyresolver"
 	"github.com/ai-dynamo/grove/operator/internal/scheduler"
 
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -44,16 +44,18 @@ func RegisterControllers(mgr ctrl.Manager, config *configv1alpha1.OperatorConfig
 		return err
 	}
 
-	nodeLabels := nodelabels.NewReconciler(mgr.GetClient())
-	if err := nodeLabels.RegisterWithManager(mgr); err != nil {
-		return err
+	topologyResolver := topologyresolver.NewReconciler(mgr.GetClient())
+	if config.FeatureGates.PodCliqueTopologyAffinity {
+		if err := topologyResolver.RegisterWithManager(mgr); err != nil {
+			return err
+		}
 	}
 
 	pcsReconciler := podcliqueset.NewReconciler(mgr, config.Controllers.PodCliqueSet, config.TopologyAwareScheduling, config.Network, schedRegistry)
 	if err := pcsReconciler.RegisterWithManager(mgr); err != nil {
 		return err
 	}
-	pcReconciler := podclique.NewReconciler(mgr, config.Controllers.PodClique, schedRegistry, nodeLabels)
+	pcReconciler := podclique.NewReconciler(mgr, config.Controllers.PodClique, schedRegistry, topologyResolver, config.FeatureGates.PodCliqueTopologyAffinity)
 	if err := pcReconciler.RegisterWithManager(mgr); err != nil {
 		return err
 	}

@@ -19,9 +19,9 @@ package components
 import (
 	"github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/internal/controller/common/component"
-	"github.com/ai-dynamo/grove/operator/internal/controller/nodelabels"
 	"github.com/ai-dynamo/grove/operator/internal/controller/podclique/components/pod"
 	pclqresourceclaim "github.com/ai-dynamo/grove/operator/internal/controller/podclique/components/resourceclaim"
+	"github.com/ai-dynamo/grove/operator/internal/controller/topologyresolver"
 	"github.com/ai-dynamo/grove/operator/internal/expect"
 	"github.com/ai-dynamo/grove/operator/internal/scheduler"
 
@@ -30,9 +30,9 @@ import (
 )
 
 // CreateOperatorRegistry initializes the operator registry for the PodClique reconciler.
-func CreateOperatorRegistry(mgr manager.Manager, eventRecorder record.EventRecorder, expectationsStore *expect.ExpectationsStore, schedRegistry scheduler.Registry, nodeLabels nodelabels.Cache) component.OperatorRegistry[v1alpha1.PodClique] {
+func CreateOperatorRegistry(mgr manager.Manager, eventRecorder record.EventRecorder, expectationsStore *expect.ExpectationsStore, schedRegistry scheduler.Registry, topologyResolver topologyresolver.Resolver) component.OperatorRegistry[v1alpha1.PodClique] {
 	reg := component.NewOperatorRegistry[v1alpha1.PodClique]()
 	reg.Register(component.KindResourceClaim, pclqresourceclaim.New(mgr.GetClient(), mgr.GetScheme()))
-	reg.Register(component.KindPod, pod.New(mgr.GetClient(), mgr.GetScheme(), eventRecorder, expectationsStore, schedRegistry, nodeLabels))
+	reg.Register(component.KindPod, pod.New(mgr.GetClient(), mgr.GetScheme(), eventRecorder, expectationsStore, schedRegistry, topologyResolver))
 	return reg
 }

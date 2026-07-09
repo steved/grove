@@ -89,10 +89,13 @@ spec:
                           Domain specifies the topology domain for creating affine replicas.
                           Must reference a domain in the topology levels defined in the ClusterTopology CR name as set in TopologyName.
                           Example: "rack" means replicas placed within all racks that the dependent cliqueNames are scheduled in.
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z][a-z0-9-]*$
                         type: string
                       topologyName:
                         description: |-
-                          TopologyName is the name of the ClusterTopology resource to use for topology-aware scheduling.
+                          TopologyName is the name of the ClusterTopologyBinding resource to use for topology-aware scheduling.
                           If topologyAffinity is set, topologyName and domain must both be specified.
                         type: string
                     required:
@@ -9191,8 +9194,8 @@ spec:
                   topology-affinity PodCliques without directly reading Node labels.
                 properties:
                   allDomains:
-                    description: AllDomains is the set of all currently known values
-                      for LabelKey.
+                    description: AllDomains is the set of domains currently capable
+                      of hosting a constrained candidate.
                     items:
                       type: string
                     type: array
@@ -9208,10 +9211,12 @@ spec:
                     description: AssociatedReady indicates whether all associated
                       PodCliques have reached their scheduled minimum.
                     type: boolean
-                  labelKey:
-                    description: LabelKey is the node label key for the configured
-                      topology domain.
-                    type: string
+                  observedTopologyBindingGeneration:
+                    description: |-
+                      ObservedTopologyBindingGeneration is the ClusterTopologyBinding generation
+                      last accepted for a complete topology resolution.
+                    format: int64
+                    type: integer
                   targetDomains:
                     description: TargetDomains is the set of topology domains this
                       PodClique should currently occupy.

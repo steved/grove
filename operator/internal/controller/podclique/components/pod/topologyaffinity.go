@@ -24,7 +24,9 @@ import (
 	"sort"
 
 	apicommon "github.com/ai-dynamo/grove/operator/api/common"
+	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/internal/controller/common/component"
+	commontopology "github.com/ai-dynamo/grove/operator/internal/controller/common/topology"
 	groveerr "github.com/ai-dynamo/grove/operator/internal/errors"
 	"github.com/ai-dynamo/grove/operator/internal/index"
 	"github.com/ai-dynamo/grove/operator/internal/utils"
@@ -57,7 +59,7 @@ func selectTopologyAffinityPodsToDelete(sc *syncContext, logger logr.Logger) []*
 	selected := make(map[string]*corev1.Pod)
 
 	for _, pod := range sc.existingPCLQPods {
-		value := pod.Labels[apicommon.LabelTopologyAffinityValue]
+		value := pod.Annotations[apicommon.AnnotationTopologyAffinityValue]
 		if !targetDomains.Has(value) {
 			selected[pod.Name] = pod
 			continue
@@ -155,7 +157,7 @@ func (r _resource) createTopologyAffinityPods(ctx context.Context, logger logr.L
 					sc.pclqExpectationsStoreKey,
 					index,
 					index,
-					addTopologyNodeAffinity(topologyAffinity.Domain, sc.topologyAffinity.LabelKey, value),
+					addTopologyNodeAffinity(topologyAffinity.Domain, sc.topologyAffinity, value),
 				),
 			)
 		}
@@ -176,7 +178,7 @@ func topologyDomainDeficits(sc *syncContext) map[string]int {
 	counts := make(map[string]int, len(sc.topologyAffinity.TargetDomains))
 	targetDomains := sets.New(sc.topologyAffinity.TargetDomains...)
 	for _, pod := range sc.existingPCLQPods {
-		value := pod.Labels[apicommon.LabelTopologyAffinityValue]
+		value := pod.Annotations[apicommon.AnnotationTopologyAffinityValue]
 		if targetDomains.Has(value) {
 			counts[value]++
 		}
@@ -191,19 +193,22 @@ func topologyDomainDeficits(sc *syncContext) map[string]int {
 	return deficits
 }
 
-func addTopologyNodeAffinity(domain, labelKey, value string) func(*corev1.Pod) {
+func addTopologyNodeAffinity(domain grovecorev1alpha1.TopologyDomain, state *commontopology.PodCliqueTopologyAffinityState, value string) func(*corev1.Pod) {
 	return func(pod *corev1.Pod) {
 		if pod.Labels == nil {
 			pod.Labels = make(map[string]string)
 		}
-		pod.Labels[apicommon.LabelTopologyAffinityDomain] = domain
-		pod.Labels[apicommon.LabelTopologyAffinityValue] = value
+		if pod.Annotations == nil {
+			pod.Annotations = make(map[string]string)
+		}
+		pod.Labels[apicommon.LabelTopologyAffinityDomain] = string(domain)
+		pod.Annotations[apicommon.AnnotationTopologyAffinityValue] = value
 
-		requirement := corev1.NodeSelectorRequirement{
-			Key:      labelKey,
+		topologyTerms := []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{{
+			Key:      state.LabelKey,
 			Operator: corev1.NodeSelectorOpIn,
 			Values:   []string{value},
-		}
+		}}}}
 
 		if pod.Spec.Affinity == nil {
 			pod.Spec.Affinity = &corev1.Affinity{}
@@ -216,18 +221,25 @@ func addTopologyNodeAffinity(domain, labelKey, value string) func(*corev1.Pod) {
 		required := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
 		if required == nil {
 			pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution = &corev1.NodeSelector{
-				NodeSelectorTerms: []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{requirement}}},
+				NodeSelectorTerms: topologyTerms,
 			}
 			return
 		}
 
 		if len(required.NodeSelectorTerms) == 0 {
-			required.NodeSelectorTerms = []corev1.NodeSelectorTerm{{MatchExpressions: []corev1.NodeSelectorRequirement{requirement}}}
+			required.NodeSelectorTerms = topologyTerms
 			return
 		}
 
+		combined := make([]corev1.NodeSelectorTerm, 0, len(required.NodeSelectorTerms)*len(topologyTerms))
 		for i := range required.NodeSelectorTerms {
-			required.NodeSelectorTerms[i].MatchExpressions = append(required.NodeSelectorTerms[i].MatchExpressions, requirement)
+			for _, topologyTerm := range topologyTerms {
+				term := required.NodeSelectorTerms[i].DeepCopy()
+				term.MatchExpressions = append(term.MatchExpressions, topologyTerm.MatchExpressions...)
+				term.MatchFields = append(term.MatchFields, topologyTerm.MatchFields...)
+				combined = append(combined, *term)
+			}
 		}
+		required.NodeSelectorTerms = combined
 	}
 }

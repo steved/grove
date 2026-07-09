@@ -169,6 +169,12 @@ const (
 	// ConditionReasonAllTopologyLevelsAvailable indicates that all required topology levels defined on a
 	// PodCliqueSet for topology-aware scheduling are defined in the ClusterTopologyBinding resource.
 	ConditionReasonAllTopologyLevelsAvailable = "AllClusterTopologyLevelsAvailable"
+	// ConditionReasonFeatureDisabled indicates that an alpha feature required by the resource is disabled.
+	ConditionReasonFeatureDisabled = "FeatureDisabled"
+	// ConditionReasonTopologyUnavailable indicates that topology evidence required by a PodClique cannot currently be resolved.
+	ConditionReasonTopologyUnavailable = "TopologyUnavailable"
+	// ConditionReasonAssociatedCliquesNotReady indicates that topology-affinity source PodCliques have not reached their readiness threshold.
+	ConditionReasonAssociatedCliquesNotReady = "AssociatedCliquesNotReady"
 )
 
 const (

@@ -19,6 +19,7 @@ package validation
 import (
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 
+	utilvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -54,10 +55,30 @@ func validateClusterTopologyLevels(levels []grovecorev1alpha1.TopologyLevel, fld
 		}
 		seenDomains[level.Domain] = true
 
-		if _, exists := seenKeys[level.Key]; exists {
-			allErrs = append(allErrs, field.Duplicate(levelPath.Child("key"), level.Key))
+		if level.Key == "" {
+			allErrs = append(allErrs, field.Required(levelPath.Child("key"), "key is required"))
 		}
-		seenKeys[level.Key] = true
+		if level.Key != "" {
+			if _, exists := seenKeys[level.Key]; exists {
+				allErrs = append(allErrs, field.Duplicate(levelPath.Child("key"), level.Key))
+			}
+			seenKeys[level.Key] = true
+		}
+
+		seenDrivers := make(map[string]struct{}, len(level.ResourceSliceAttributes))
+		for j, ref := range level.ResourceSliceAttributes {
+			refPath := levelPath.Child("resourceSliceAttributes").Index(j)
+			if _, exists := seenDrivers[ref.Driver]; exists {
+				allErrs = append(allErrs, field.Duplicate(refPath.Child("driver"), ref.Driver))
+			}
+			seenDrivers[ref.Driver] = struct{}{}
+			if errs := utilvalidation.IsDNS1123Subdomain(ref.Driver); len(errs) > 0 {
+				allErrs = append(allErrs, field.Invalid(refPath.Child("driver"), ref.Driver, errs[0]))
+			}
+			if ref.Name == "" {
+				allErrs = append(allErrs, field.Required(refPath.Child("name"), "attribute name is required"))
+			}
+		}
 	}
 
 	return allErrs

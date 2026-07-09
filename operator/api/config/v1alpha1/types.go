@@ -131,9 +131,18 @@ type OperatorConfiguration struct {
 	Authorizer              AuthorizerConfig                     `json:"authorizer"`
 	TopologyAwareScheduling TopologyAwareSchedulingConfiguration `json:"topologyAwareScheduling"`
 	// +optional
+	FeatureGates FeatureGateConfiguration `json:"featureGates,omitempty"`
+	// +optional
 	Network NetworkAcceleration `json:"network,omitempty"` // Network is the configuration for network acceleration features like MNNVL.
 	// Scheduler configures which scheduler backends are active and their per-backend options.
 	Scheduler SchedulerConfiguration `json:"scheduler"`
+}
+
+// FeatureGateConfiguration controls alpha Grove features.
+type FeatureGateConfiguration struct {
+	// PodCliqueTopologyAffinity enables topologyAffinity on PodClique templates.
+	// +optional
+	PodCliqueTopologyAffinity bool `json:"podCliqueTopologyAffinity,omitempty"`
 }
 
 // LeaderElectionConfiguration defines the configuration for the leader election.

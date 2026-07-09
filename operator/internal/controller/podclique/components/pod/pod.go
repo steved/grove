@@ -26,7 +26,7 @@ import (
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/internal/controller/common/component"
 	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
-	"github.com/ai-dynamo/grove/operator/internal/controller/nodelabels"
+	"github.com/ai-dynamo/grove/operator/internal/controller/topologyresolver"
 	groveerr "github.com/ai-dynamo/grove/operator/internal/errors"
 	"github.com/ai-dynamo/grove/operator/internal/expect"
 	"github.com/ai-dynamo/grove/operator/internal/resourceclaim"
@@ -78,18 +78,18 @@ type _resource struct {
 	eventRecorder     record.EventRecorder
 	expectationsStore *expect.ExpectationsStore
 	schedRegistry     scheduler.Registry
-	nodeLabels        nodelabels.Cache
+	topologyResolver  topologyresolver.Resolver
 }
 
 // New creates a new Pod operator for managing Pod resources within PodCliques
-func New(client client.Client, scheme *runtime.Scheme, eventRecorder record.EventRecorder, expectationsStore *expect.ExpectationsStore, schedRegistry scheduler.Registry, nodeLabels nodelabels.Cache) component.Operator[grovecorev1alpha1.PodClique] {
+func New(client client.Client, scheme *runtime.Scheme, eventRecorder record.EventRecorder, expectationsStore *expect.ExpectationsStore, schedRegistry scheduler.Registry, topologyResolver topologyresolver.Resolver) component.Operator[grovecorev1alpha1.PodClique] {
 	return &_resource{
 		client:            client,
 		scheme:            scheme,
 		eventRecorder:     eventRecorder,
 		expectationsStore: expectationsStore,
 		schedRegistry:     schedRegistry,
-		nodeLabels:        nodeLabels,
+		topologyResolver:  topologyResolver,
 	}
 }
 

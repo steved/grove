@@ -17,3 +17,4 @@ scheduler:
 grove:
   enabled: true
   profiling: false
+  podclique_topology_affinity: true

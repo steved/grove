@@ -14,16 +14,21 @@
 // limitations under the License.
 // */
 
-package nodelabels
+package topologyresolver
 
 import (
 	"context"
+
+	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
+
+	resourcev1 "k8s.io/api/resource/v1"
 )
 
-// Cache stores label values discovered from Node metadata.
-type Cache interface {
-	Values(ctx context.Context, labelKey string) ([]string, error)
-	ValueForNode(ctx context.Context, labelKey, nodeName string) (string, error)
+// Resolver provides the shared topology views used by PodClique reconciliation.
+type Resolver interface {
+	NodeValues(ctx context.Context, labelKey string) ([]string, error)
+	NodeValue(ctx context.Context, labelKey, nodeName string) (string, error)
+	ResourceSliceDeviceDomains(ctx context.Context, refs []grovecorev1alpha1.ResourceSliceAttributeReference, devices []resourcev1.DeviceRequestAllocationResult) ([]string, bool, error)
 }
 
-var _ Cache = (*Reconciler)(nil)
+var _ Resolver = (*Reconciler)(nil)

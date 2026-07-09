@@ -18,11 +18,14 @@ package podclique
 
 import (
 	"context"
+	"slices"
 	"strings"
 
+	apicommon "github.com/ai-dynamo/grove/operator/api/common"
 	"github.com/ai-dynamo/grove/operator/api/common/constants"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
+	commontopology "github.com/ai-dynamo/grove/operator/internal/controller/common/topology"
 	grovectrlutils "github.com/ai-dynamo/grove/operator/internal/controller/utils"
 	"github.com/ai-dynamo/grove/operator/internal/expect"
 	"github.com/ai-dynamo/grove/operator/internal/utils"
@@ -66,6 +69,11 @@ func (r *Reconciler) RegisterWithManager(mgr ctrl.Manager) error {
 		).
 		Owns(&corev1.Pod{}, builder.WithPredicates(r.podPredicate())).
 		Watches(
+			&corev1.Pod{},
+			handler.EnqueueRequestsFromMapFunc(r.mapTopologyAffinitySourcePodToDependentPCLQs()),
+			builder.WithPredicates(topologyAffinitySourcePodPredicate()),
+		).
+		Watches(
 			&grovecorev1alpha1.PodCliqueSet{},
 			handler.EnqueueRequestsFromMapFunc(mapPodCliqueSetToPCLQs()),
 			builder.WithPredicates(podCliqueSetPredicate()),
@@ -81,6 +89,87 @@ func (r *Reconciler) RegisterWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(podGangPredicate()),
 		).
 		Complete(r)
+}
+
+// topologyAffinitySourcePodPredicate selects Pod events that can change the topology
+// domains resolved for a dependent PodClique. A separate watch is required because
+// Owns only enqueues the Pod's owning PodClique, not topology-affine siblings.
+func topologyAffinitySourcePodPredicate() predicate.Predicate {
+	boundManagedPod := func(obj client.Object) bool {
+		pod, ok := obj.(*corev1.Pod)
+		return ok && isManagedPod(pod) && pod.Spec.NodeName != ""
+	}
+	return predicate.Funcs{
+		CreateFunc: func(_ event.CreateEvent) bool { return false },
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return boundManagedPod(e.Object)
+		},
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldPod, oldOK := e.ObjectOld.(*corev1.Pod)
+			newPod, newOK := e.ObjectNew.(*corev1.Pod)
+			return oldOK && newOK && isManagedPod(oldPod) && oldPod.Spec.NodeName != newPod.Spec.NodeName
+		},
+		GenericFunc: func(_ event.GenericEvent) bool { return false },
+	}
+}
+
+// mapTopologyAffinitySourcePodToDependentPCLQs maps a source Pod placement event
+// to every PodClique in the same PodCliqueSet replica whose topology affinity
+// references the source PodClique.
+func (r *Reconciler) mapTopologyAffinitySourcePodToDependentPCLQs() handler.MapFunc {
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		pod, ok := obj.(*corev1.Pod)
+		if !ok {
+			return nil
+		}
+
+		sourcePCLQName, ok := pod.Labels[apicommon.LabelPodClique]
+		if !ok || sourcePCLQName == "" {
+			return nil
+		}
+		pcsName, ok := pod.Labels[apicommon.LabelPartOfKey]
+		if !ok || pcsName == "" {
+			return nil
+		}
+		pcsReplicaIndex, ok := pod.Labels[apicommon.LabelPodCliqueSetReplicaIndex]
+		if !ok || pcsReplicaIndex == "" {
+			return nil
+		}
+
+		logger := ctrllogger.FromContext(ctx).WithName(controllerName)
+		pcs, err := componentutils.GetPodCliqueSet(ctx, r.client, pod.ObjectMeta)
+		if err != nil {
+			logger.Error(err, "failed to get PodCliqueSet while mapping topology-affinity source Pod", "pod", client.ObjectKeyFromObject(pod))
+			return nil
+		}
+
+		pclqs, err := componentutils.GetPCLQsMatchingLabels(ctx, r.client, pod.Namespace, map[string]string{
+			apicommon.LabelManagedByKey:             apicommon.LabelManagedByValue,
+			apicommon.LabelPartOfKey:                pcsName,
+			apicommon.LabelPodCliqueSetReplicaIndex: pcsReplicaIndex,
+		})
+		if err != nil {
+			logger.Error(err, "failed to list PodCliques while mapping topology-affinity source Pod", "pod", client.ObjectKeyFromObject(pod))
+			return nil
+		}
+
+		requests := make([]reconcile.Request, 0)
+		for i := range pclqs {
+			pclq := &pclqs[i]
+			if pclq.Name == sourcePCLQName || pclq.Spec.Affinity == nil || pclq.Spec.Affinity.TopologyAffinity == nil {
+				continue
+			}
+			associatedPCLQNames, err := commontopology.AssociatedPodCliqueFQNs(pcs, pclq, pclq.Spec.Affinity.TopologyAffinity)
+			if err != nil {
+				logger.Error(err, "failed to resolve topology-affinity dependencies", "podClique", client.ObjectKeyFromObject(pclq))
+				continue
+			}
+			if slices.Contains(associatedPCLQNames, sourcePCLQName) {
+				requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(pclq)})
+			}
+		}
+		return requests
+	}
 }
 
 // managedPodCliquePredicate filters PodClique events to only process managed PodCliques owned by expected resources

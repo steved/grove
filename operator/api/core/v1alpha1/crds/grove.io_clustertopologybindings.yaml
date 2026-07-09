@@ -58,10 +58,8 @@ spec:
                   backend-specific topology resources.
                   Uniqueness of domain and key is enforced by the ClusterTopologyBinding validating webhook.
                 items:
-                  description: |-
-                    TopologyLevel defines one level in Grove's source-of-truth topology hierarchy.
-                    Each level maps a Grove topology domain to the node label key that a backend
-                    topology representation should use for that level.
+                  description: TopologyLevel maps one logical topology domain to its
+                    infrastructure representations.
                   properties:
                     domain:
                       description: Domain is a platform provider-agnostic level identifier.
@@ -71,13 +69,38 @@ spec:
                       type: string
                     key:
                       description: |-
-                        Key is the node label key that identifies this topology domain.
+                        Key is the node label key that identifies this topology domain and is used
+                        for all topology-affinity Pod placement.
                         Must be a valid Kubernetes label key (qualified name).
                         Examples: "topology.kubernetes.io/zone", "kubernetes.io/hostname"
                       maxLength: 63
                       minLength: 1
                       pattern: ^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]/)?([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$
                       type: string
+                    resourceSliceAttributes:
+                      description: |-
+                        ResourceSliceAttributes maps DRA drivers to the device attribute that
+                        carries this domain's canonical string value for resolving associated
+                        Pods with allocated devices. These attributes do not control Pod placement.
+                      items:
+                        description: ResourceSliceAttributeReference identifies one
+                          driver's representation of a topology domain.
+                        properties:
+                          driver:
+                            description: Driver is the driver name published in ResourceSlice.spec.driver.
+                            type: string
+                          name:
+                            description: Name is the fully qualified device attribute
+                              name.
+                            type: string
+                        required:
+                        - driver
+                        - name
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - driver
+                      x-kubernetes-list-type: map
                   required:
                   - domain
                   - key

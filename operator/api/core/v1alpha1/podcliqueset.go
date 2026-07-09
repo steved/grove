@@ -275,7 +275,7 @@ type PodCliqueAffinity struct {
 
 // TopologyAffinity defines PodClique topology affinity rules.
 type TopologyAffinity struct {
-	// TopologyName is the name of the ClusterTopology resource to use for topology-aware scheduling.
+	// TopologyName is the name of the ClusterTopologyBinding resource to use for topology-aware scheduling.
 	// If topologyAffinity is set, topologyName and domain must both be specified.
 	// +required
 	TopologyName string `json:"topologyName"`
@@ -283,7 +283,7 @@ type TopologyAffinity struct {
 	// Must reference a domain in the topology levels defined in the ClusterTopology CR name as set in TopologyName.
 	// Example: "rack" means replicas placed within all racks that the dependent cliqueNames are scheduled in.
 	// +required
-	Domain string `json:"domain"`
+	Domain TopologyDomain `json:"domain"`
 	// CliqueNames is the list of names of the PodCliques that are part of the affinity group.
 	// Pods are scheduled at the union of all scheduled PodClique domains.
 	// +required

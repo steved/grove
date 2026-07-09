@@ -17,6 +17,7 @@
 package v1alpha1
 
 import (
+	resourcev1 "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -114,15 +115,14 @@ type SchedulerTopologyStatus struct {
 	Message string `json:"message,omitempty"`
 }
 
-// TopologyLevel defines one level in Grove's source-of-truth topology hierarchy.
-// Each level maps a Grove topology domain to the node label key that a backend
-// topology representation should use for that level.
+// TopologyLevel maps one logical topology domain to its infrastructure representations.
 type TopologyLevel struct {
 	// Domain is a platform provider-agnostic level identifier.
 	// +kubebuilder:validation:Required
 	Domain TopologyDomain `json:"domain"`
 
-	// Key is the node label key that identifies this topology domain.
+	// Key is the node label key that identifies this topology domain and is used
+	// for all topology-affinity Pod placement.
 	// Must be a valid Kubernetes label key (qualified name).
 	// Examples: "topology.kubernetes.io/zone", "kubernetes.io/hostname"
 	// +kubebuilder:validation:Required
@@ -130,6 +130,22 @@ type TopologyLevel struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]/)?([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]$`
 	Key string `json:"key"`
+
+	// ResourceSliceAttributes maps DRA drivers to the device attribute that
+	// carries this domain's canonical string value for resolving associated
+	// Pods with allocated devices. These attributes do not control Pod placement.
+	// +listType=map
+	// +listMapKey=driver
+	// +optional
+	ResourceSliceAttributes []ResourceSliceAttributeReference `json:"resourceSliceAttributes,omitempty"`
+}
+
+// ResourceSliceAttributeReference identifies one driver's representation of a topology domain.
+type ResourceSliceAttributeReference struct {
+	// Driver is the driver name published in ResourceSlice.spec.driver.
+	Driver string `json:"driver"`
+	// Name is the fully qualified device attribute name.
+	Name resourcev1.FullyQualifiedName `json:"name"`
 }
 
 // TopologyDomain is the Grove-facing identifier for a topology level in the

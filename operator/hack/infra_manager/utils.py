@@ -29,6 +29,7 @@ from infra_manager.constants import (
     HELM_KEY_ANNOTATION_PREFIX,
     HELM_KEY_BURST,
     HELM_KEY_PCLQ_SYNCS,
+    HELM_KEY_PODCLIQUE_TOPOLOGY_AFFINITY,
     HELM_KEY_PCS_SYNCS,
     HELM_KEY_PCSG_SYNCS,
     HELM_KEY_PPROF_BIND_HOST,
@@ -90,6 +91,7 @@ def collect_grove_helm_overrides(cfg: GroveConfig) -> list[tuple[str, str]]:
         (cfg.pcsg_syncs is not None, HELM_KEY_PCSG_SYNCS, str(cfg.pcsg_syncs)),
         (cfg.qps is not None, HELM_KEY_QPS, str(cfg.qps)),
         (cfg.burst is not None, HELM_KEY_BURST, str(cfg.burst)),
+        (cfg.podclique_topology_affinity, HELM_KEY_PODCLIQUE_TOPOLOGY_AFFINITY, "true"),
     ]
     result: list[tuple[str, str]] = [("--set", f"{key}={value}") for enabled, key, value in overrides if enabled]
     if cfg.profiling:

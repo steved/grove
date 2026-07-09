@@ -162,6 +162,7 @@ HELM_KEY_PCLQ_SYNCS = "config.controllers.podClique.concurrentSyncs"
 HELM_KEY_PCSG_SYNCS = "config.controllers.podCliqueScalingGroup.concurrentSyncs"
 HELM_KEY_QPS = "config.runtimeClientConnection.qps"
 HELM_KEY_BURST = "config.runtimeClientConnection.burst"
+HELM_KEY_PODCLIQUE_TOPOLOGY_AFFINITY = "config.featureGates.podCliqueTopologyAffinity"
 
 # -- K3d cluster defaults --
 DEFAULT_CLUSTER_NAME = "shared-e2e-test-cluster"

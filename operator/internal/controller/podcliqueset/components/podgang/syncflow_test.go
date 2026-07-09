@@ -50,6 +50,123 @@ var defaultFakeSchedulerRegistry = &testutils.FakeSchedulerRegistry{
 	DefaultBackend: "default-scheduler",
 }
 
+func TestDeterminePodCliqueReplicasUsesLivePodClique(t *testing.T) {
+	const pclqName = "test-pclq"
+	template := &grovecorev1alpha1.PodCliqueTemplateSpec{
+		Spec: grovecorev1alpha1.PodCliqueSpec{Replicas: 2},
+	}
+
+	tests := []struct {
+		name          string
+		existingPCLQs []grovecorev1alpha1.PodClique
+		wantReplicas  int32
+	}{
+		{
+			name:         "template replicas before PodClique creation",
+			wantReplicas: 2,
+		},
+		{
+			name: "live replicas after direct scale",
+			existingPCLQs: []grovecorev1alpha1.PodClique{
+				{
+					ObjectMeta: metav1.ObjectMeta{Name: pclqName},
+					Spec:       grovecorev1alpha1.PodCliqueSpec{Replicas: 3},
+				},
+			},
+			wantReplicas: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := &syncContext{existingPCLQByName: componentutils.PodCliqueByName(tt.existingPCLQs)}
+
+			assert.Equal(t, tt.wantReplicas, determinePodCliqueReplicas(sc, template, pclqName))
+		})
+	}
+}
+
+func TestBuildBasePodGangUsesLiveReplicasForPCSGPodClique(t *testing.T) {
+	const (
+		pclqName = "test-pcs-0-workers-0-lpu"
+		clique   = "lpu"
+	)
+	pcs := &grovecorev1alpha1.PodCliqueSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-pcs", Namespace: "default"},
+		Spec: grovecorev1alpha1.PodCliqueSetSpec{
+			Replicas: 1,
+			Template: grovecorev1alpha1.PodCliqueSetTemplateSpec{
+				Cliques: []*grovecorev1alpha1.PodCliqueTemplateSpec{
+					{
+						Name: clique,
+						Spec: grovecorev1alpha1.PodCliqueSpec{
+							Replicas:     2,
+							MinAvailable: ptr.To(int32(1)),
+						},
+					},
+				},
+				PodCliqueScalingGroupConfigs: []grovecorev1alpha1.PodCliqueScalingGroupConfig{
+					{
+						Name:         "workers",
+						Replicas:     ptr.To(int32(1)),
+						MinAvailable: ptr.To(int32(1)),
+						CliqueNames:  []string{clique},
+					},
+				},
+			},
+		},
+	}
+	pclq := grovecorev1alpha1.PodClique{
+		ObjectMeta: metav1.ObjectMeta{Name: pclqName},
+		Spec:       grovecorev1alpha1.PodCliqueSpec{Replicas: 3},
+	}
+	sc := &syncContext{
+		pcs:                pcs,
+		existingPCLQByName: componentutils.PodCliqueByName([]grovecorev1alpha1.PodClique{pclq}),
+	}
+
+	podGangs, err := buildExpectedBasePodGangForPCSReplicas(sc)
+
+	require.NoError(t, err)
+	require.Len(t, podGangs, 1)
+	require.Len(t, podGangs[0].pclqs, 1)
+	assert.Equal(t, pclqName, podGangs[0].pclqs[0].fqn)
+	assert.Equal(t, int32(3), podGangs[0].pclqs[0].replicas)
+}
+
+func TestBuildPodCliqueInfoExpandsLiveReplicasForTopologyAffinity(t *testing.T) {
+	const pclqName = "test-pclq"
+	pclq := grovecorev1alpha1.PodClique{
+		ObjectMeta: metav1.ObjectMeta{Name: pclqName},
+		Spec:       grovecorev1alpha1.PodCliqueSpec{Replicas: 3},
+		Status: grovecorev1alpha1.PodCliqueStatus{
+			TopologyAffinity: &grovecorev1alpha1.PodCliqueTopologyAffinityStatus{
+				TargetDomains: []string{"rack-a", "rack-b"},
+			},
+		},
+	}
+	sc := &syncContext{
+		pcs:                &grovecorev1alpha1.PodCliqueSet{},
+		existingPCLQs:      []grovecorev1alpha1.PodClique{pclq},
+		existingPCLQByName: componentutils.PodCliqueByName([]grovecorev1alpha1.PodClique{pclq}),
+	}
+	template := &grovecorev1alpha1.PodCliqueTemplateSpec{
+		Spec: grovecorev1alpha1.PodCliqueSpec{
+			Replicas:     1,
+			MinAvailable: ptr.To(int32(1)),
+			Affinity: &grovecorev1alpha1.PodCliqueAffinity{
+				TopologyAffinity: &grovecorev1alpha1.TopologyAffinity{},
+			},
+		},
+	}
+
+	info, err := buildPodCliqueInfo(sc, template, pclqName)
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(6), info.replicas)
+	assert.Equal(t, int32(6), info.minAvailable)
+}
+
 func TestDetermineTopologyAffinityReplicasUsesPodCliqueStatus(t *testing.T) {
 	sc := &syncContext{
 		existingPCLQs: []grovecorev1alpha1.PodClique{
