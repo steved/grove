@@ -79,36 +79,23 @@ func (r _resource) GetExistingResourceNames(ctx context.Context, _ logr.Logger, 
 
 // Sync synchronizes all resources that the Role Operator manages.
 func (r _resource) Sync(ctx context.Context, logger logr.Logger, pcs *grovecorev1alpha1.PodCliqueSet) error {
-	existingRoleNames, err := r.GetExistingResourceNames(ctx, logger, pcs.ObjectMeta)
-	if err != nil {
-		return groveerr.WrapError(err,
-			errCodeGetRole,
-			component.OperationSync,
-			fmt.Sprintf("Error getting existing Role names for PodCliqueSet: %v", client.ObjectKeyFromObject(pcs)),
-		)
-	}
-	if len(existingRoleNames) > 0 {
-		logger.Info("Role already exists, skipping creation", "existingRole", existingRoleNames[0])
-		return nil
-	}
 	objectKey := getObjectKey(pcs.ObjectMeta)
 	role := emptyRole(objectKey)
 	logger.Info("Running CreateOrUpdate Role", "objectKey", objectKey)
-	if err := r.buildResource(pcs, role); err != nil {
-		return groveerr.WrapError(err,
-			errSyncRole,
-			component.OperationSync,
-			fmt.Sprintf("Error building Role: %v for PodCliqueSet: %v", objectKey, client.ObjectKeyFromObject(pcs)),
-		)
-	}
-	if err := client.IgnoreAlreadyExists(r.client.Create(ctx, role)); err != nil {
+	operationResult, err := controllerutil.CreateOrPatch(ctx, r.client, role, func() error {
+		if role.ResourceVersion != "" && !metav1.IsControlledBy(role, pcs) {
+			return fmt.Errorf("role %v is not controlled by PodCliqueSet %v", objectKey, client.ObjectKeyFromObject(pcs))
+		}
+		return r.buildResource(pcs, role)
+	})
+	if err != nil {
 		return groveerr.WrapError(err,
 			errSyncRole,
 			component.OperationSync,
 			fmt.Sprintf("Error syncing Role: %v for PodCliqueSet: %v", objectKey, client.ObjectKeyFromObject(pcs)),
 		)
 	}
-	logger.Info("Created Role", "objectKey", objectKey)
+	logger.Info("Synced Role", "objectKey", objectKey, "operationResult", operationResult)
 	return nil
 }
 

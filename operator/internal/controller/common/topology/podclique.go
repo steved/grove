@@ -20,11 +20,12 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 
+	apicommon "github.com/ai-dynamo/grove/operator/api/common"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	componentutils "github.com/ai-dynamo/grove/operator/internal/controller/common/component/utils"
 	"github.com/ai-dynamo/grove/operator/internal/controller/topologyresolver"
-	internalutils "github.com/ai-dynamo/grove/operator/internal/utils"
 
 	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
@@ -186,15 +187,26 @@ func resourceClaimName(pod *corev1.Pod, claim corev1.PodResourceClaim) (string, 
 }
 
 // AssociatedPodCliqueFQNs resolves unqualified cliqueNames in topologyAffinity
-// into concrete PodClique names for this PodCliqueSet replica.
+// into concrete PodClique names for the target's PodCliqueScalingGroup replica.
 func AssociatedPodCliqueFQNs(pcs *grovecorev1alpha1.PodCliqueSet, pclq *grovecorev1alpha1.PodClique, affinity *grovecorev1alpha1.TopologyAffinity) ([]string, error) {
-	pcsReplicaIndex, err := internalutils.GetPodCliqueSetReplicaIndexFromPodCliqueFQN(pcs.Name, pclq.Name)
+	pcsgName, ok := pclq.Labels[apicommon.LabelPodCliqueScalingGroup]
+	if !ok || pcsgName == "" {
+		return nil, fmt.Errorf("pod clique %q in PodCliqueSet %q is missing label %q", pclq.Name, pcs.Name, apicommon.LabelPodCliqueScalingGroup)
+	}
+	pcsgReplicaIndexValue, ok := pclq.Labels[apicommon.LabelPodCliqueScalingGroupReplicaIndex]
+	if !ok || pcsgReplicaIndexValue == "" {
+		return nil, fmt.Errorf("pod clique %q in PodCliqueSet %q is missing label %q", pclq.Name, pcs.Name, apicommon.LabelPodCliqueScalingGroupReplicaIndex)
+	}
+	pcsgReplicaIndex, err := strconv.Atoi(pcsgReplicaIndexValue)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pod clique %q has invalid PodCliqueScalingGroup replica index %q: %w", pclq.Name, pcsgReplicaIndexValue, err)
+	}
+	if pcsgReplicaIndex < 0 {
+		return nil, fmt.Errorf("pod clique %q has negative PodCliqueScalingGroup replica index %d", pclq.Name, pcsgReplicaIndex)
 	}
 	names := make([]string, 0, len(affinity.CliqueNames))
 	for _, cliqueName := range affinity.CliqueNames {
-		names = append(names, componentutils.GenerateDependencyNamesForBasePodGang(pcs, pcsReplicaIndex, cliqueName)...)
+		names = append(names, apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgName, Replica: pcsgReplicaIndex}, cliqueName))
 	}
 	return lo.Uniq(names), nil
 }

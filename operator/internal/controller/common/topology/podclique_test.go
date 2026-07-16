@@ -38,7 +38,15 @@ import (
 
 func TestAssociatedScheduledDomainsEmptyOnlyWhenAllSourcesScaledToZero(t *testing.T) {
 	pcs := &grovecorev1alpha1.PodCliqueSet{ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: "default"}}
-	target := &grovecorev1alpha1.PodClique{ObjectMeta: metav1.ObjectMeta{Name: "workload-0-target", Namespace: "default"}}
+	pcsgName := apicommon.GeneratePodCliqueScalingGroupName(apicommon.ResourceNameReplica{Name: pcs.Name, Replica: 0}, "workers")
+	target := &grovecorev1alpha1.PodClique{ObjectMeta: metav1.ObjectMeta{
+		Name:      apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgName, Replica: 0}, "target"),
+		Namespace: "default",
+		Labels: map[string]string{
+			apicommon.LabelPodCliqueScalingGroup:             pcsgName,
+			apicommon.LabelPodCliqueScalingGroupReplicaIndex: "0",
+		},
+	}}
 	affinity := &grovecorev1alpha1.TopologyAffinity{CliqueNames: []string{"source-a", "source-b"}}
 	level := grovecorev1alpha1.TopologyLevel{Domain: "block", Key: "network.example.com/block"}
 
@@ -56,7 +64,7 @@ func TestAssociatedScheduledDomainsEmptyOnlyWhenAllSourcesScaledToZero(t *testin
 			for i, replicas := range test.replicas {
 				objects = append(objects, &grovecorev1alpha1.PodClique{
 					ObjectMeta: metav1.ObjectMeta{
-						Name:      apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcs.Name, Replica: 0}, affinity.CliqueNames[i]),
+						Name:      apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgName, Replica: 0}, affinity.CliqueNames[i]),
 						Namespace: pcs.Namespace,
 					},
 					Spec:   grovecorev1alpha1.PodCliqueSpec{Replicas: replicas},
@@ -71,6 +79,39 @@ func TestAssociatedScheduledDomainsEmptyOnlyWhenAllSourcesScaledToZero(t *testin
 			assert.Equal(t, test.wantReady, ready)
 		})
 	}
+}
+
+func TestAssociatedPodCliqueFQNsUsesCurrentPodCliqueScalingGroupReplica(t *testing.T) {
+	pcs := &grovecorev1alpha1.PodCliqueSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "workload", Namespace: "default"},
+		Spec: grovecorev1alpha1.PodCliqueSetSpec{Template: grovecorev1alpha1.PodCliqueSetTemplateSpec{
+			PodCliqueScalingGroupConfigs: []grovecorev1alpha1.PodCliqueScalingGroupConfig{{
+				Name:         "workers",
+				CliqueNames:  []string{"source-a", "source-b", "target"},
+				Replicas:     ptr.To[int32](4),
+				MinAvailable: ptr.To[int32](2),
+			}},
+		}},
+	}
+	pcsgName := apicommon.GeneratePodCliqueScalingGroupName(apicommon.ResourceNameReplica{Name: pcs.Name, Replica: 0}, "workers")
+	pclq := &grovecorev1alpha1.PodClique{ObjectMeta: metav1.ObjectMeta{
+		Name: apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{
+			Name: pcsgName, Replica: 2,
+		}, "target"),
+		Labels: map[string]string{
+			apicommon.LabelPodCliqueScalingGroup:             pcsgName,
+			apicommon.LabelPodCliqueScalingGroupReplicaIndex: "2",
+		},
+	}}
+	affinity := &grovecorev1alpha1.TopologyAffinity{CliqueNames: []string{"source-a", "source-b"}}
+
+	names, err := AssociatedPodCliqueFQNs(pcs, pclq, affinity)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgName, Replica: 2}, "source-a"),
+		apicommon.GeneratePodCliqueName(apicommon.ResourceNameReplica{Name: pcsgName, Replica: 2}, "source-b"),
+	}, names)
 }
 
 func TestAssociatedPodDomainsFromAllocatedDevices(t *testing.T) {

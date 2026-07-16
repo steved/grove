@@ -175,23 +175,36 @@ func TestMapTopologyAffinitySourcePodToDependentPCLQs(t *testing.T) {
 
 	cl := testutils.SetupFakeClient(pcs, source0, source1, target0, target1, targetInOtherPCSReplica)
 	r := &Reconciler{client: cl}
-	pod := testutils.NewPodBuilder("source-0", namespace).
-		WithOwner(source0.Name).
-		WithLabels(map[string]string{
-			common.LabelManagedByKey:             common.LabelManagedByValue,
-			common.LabelPartOfKey:                pcsName,
-			common.LabelPodClique:                source0.Name,
-			common.LabelPodCliqueSetReplicaIndex: "0",
-			common.LabelPodCliqueScalingGroup:    pcsgName,
-		}).
-		Build()
-	pod.Spec.NodeName = "worker-a"
+	tests := []struct {
+		name             string
+		source           *grovecorev1alpha1.PodClique
+		pcsgReplicaIndex string
+		target           *grovecorev1alpha1.PodClique
+	}{
+		{name: "replica zero", source: source0, pcsgReplicaIndex: "0", target: target0},
+		{name: "replica one", source: source1, pcsgReplicaIndex: "1", target: target1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pod := testutils.NewPodBuilder(test.source.Name+"-pod", namespace).
+				WithOwner(test.source.Name).
+				WithLabels(map[string]string{
+					common.LabelManagedByKey:                      common.LabelManagedByValue,
+					common.LabelPartOfKey:                         pcsName,
+					common.LabelPodClique:                         test.source.Name,
+					common.LabelPodCliqueSetReplicaIndex:          "0",
+					common.LabelPodCliqueScalingGroup:             pcsgName,
+					common.LabelPodCliqueScalingGroupReplicaIndex: test.pcsgReplicaIndex,
+				}).
+				Build()
+			pod.Spec.NodeName = "worker-a"
 
-	requests := r.mapTopologyAffinitySourcePodToDependentPCLQs()(context.Background(), pod)
-	assert.ElementsMatch(t, []reconcile.Request{
-		{NamespacedName: types.NamespacedName{Namespace: namespace, Name: target0.Name}},
-		{NamespacedName: types.NamespacedName{Namespace: namespace, Name: target1.Name}},
-	}, requests)
+			requests := r.mapTopologyAffinitySourcePodToDependentPCLQs()(context.Background(), pod)
+			assert.Equal(t, []reconcile.Request{
+				{NamespacedName: types.NamespacedName{Namespace: namespace, Name: test.target.Name}},
+			}, requests)
+		})
+	}
 }
 
 // TestPodCliqueSetPredicateCurrentlyUpdatingReplicaChanges verifies that the PodCliqueSet

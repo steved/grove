@@ -80,7 +80,7 @@ func TestGetExistingResourceNames(t *testing.T) {
 				Namespace: "default",
 				OwnerReferences: []metav1.OwnerReference{
 					{
-						APIVersion: "grove.ai-dynamo.io/v1alpha1",
+						APIVersion: grovecorev1alpha1.SchemeGroupVersion.String(),
 						Kind:       "PodCliqueSet",
 						Name:       "test-pcs",
 						UID:        pcsUID,
@@ -117,7 +117,7 @@ func TestGetExistingResourceNames(t *testing.T) {
 				Namespace: "default",
 				OwnerReferences: []metav1.OwnerReference{
 					{
-						APIVersion: "grove.ai-dynamo.io/v1alpha1",
+						APIVersion: grovecorev1alpha1.SchemeGroupVersion.String(),
 						Kind:       "PodCliqueSet",
 						Name:       "other-pcs",
 						UID:        types.UID("other-uid"),
@@ -188,8 +188,8 @@ func TestSync(t *testing.T) {
 		assert.Equal(t, []string{"get", "list", "watch"}, role.Rules[1].Verbs)
 	})
 
-	// Test when role already exists with correct owner
-	t.Run("skips when role exists", func(t *testing.T) {
+	// Test upgrading an existing role with the permissions required by newer init containers.
+	t.Run("updates existing role", func(t *testing.T) {
 		pcsUID := types.UID("pcs-uid-123")
 		role := &rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{
@@ -197,12 +197,19 @@ func TestSync(t *testing.T) {
 				Namespace: "default",
 				OwnerReferences: []metav1.OwnerReference{
 					{
-						APIVersion: "grove.ai-dynamo.io/v1alpha1",
+						APIVersion: grovecorev1alpha1.SchemeGroupVersion.String(),
 						Kind:       "PodCliqueSet",
 						Name:       "test-pcs",
 						UID:        pcsUID,
 						Controller: ptr.To(true),
 					},
+				},
+			},
+			Rules: []rbacv1.PolicyRule{
+				{
+					APIGroups: []string{""},
+					Resources: []string{"pods", "pods/status"},
+					Verbs:     []string{"get", "list", "watch"},
 				},
 			},
 		}
@@ -223,8 +230,12 @@ func TestSync(t *testing.T) {
 
 		err := operator.Sync(context.Background(), logr.Discard(), pcs)
 
-		// Should not error when role already exists
 		require.NoError(t, err)
+		updatedRole := &rbacv1.Role{}
+		require.NoError(t, cl.Get(context.Background(), client.ObjectKeyFromObject(role), updatedRole))
+		require.Len(t, updatedRole.Rules, 2)
+		assert.Equal(t, []string{"podcliques"}, updatedRole.Rules[1].Resources)
+		assert.Equal(t, []string{"get", "list", "watch"}, updatedRole.Rules[1].Verbs)
 	})
 }
 

@@ -71,28 +71,28 @@ func TestGenerateArgsForInitContainerIncludesTopologyAffinityGate(t *testing.T) 
 	args, err := generateArgsForInitContainer(pcs, pclq)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"--podcliques=test-pcs-0-cyborg:" + apiconstants.ConditionTopologyAffinityReady,
-		"--podcliques=test-pcs-0-lpu",
+		"--podcliques=test-pcs-0-workers-2-cyborg:" + apiconstants.ConditionTopologyAffinityReady,
+		"--podcliques=test-pcs-0-workers-2-lpu",
 	}, args)
 }
 
 func TestGenerateArgsForInitContainerPreservesReadinessAndConditionForSamePodClique(t *testing.T) {
 	pcs, pclq := topologyAffinityInitContainerFixture()
-	pclq.Spec.StartsAfter = []string{"test-pcs-0-cyborg"}
+	pclq.Spec.StartsAfter = []string{pclq.Name}
 
 	args, err := generateArgsForInitContainer(pcs, pclq)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
-		"--podcliques=test-pcs-0-cyborg",
-		"--podcliques=test-pcs-0-cyborg:" + apiconstants.ConditionTopologyAffinityReady,
-		"--podcliques=test-pcs-0-lpu",
+		"--podcliques=test-pcs-0-workers-2-cyborg",
+		"--podcliques=test-pcs-0-workers-2-cyborg:" + apiconstants.ConditionTopologyAffinityReady,
+		"--podcliques=test-pcs-0-workers-2-lpu",
 	}, args)
 }
 
 func TestCreateTopologyAffinityPodsWaitsForCreateExpectations(t *testing.T) {
 	pcs, pclq := topologyAffinityInitContainerFixture()
 	expectationsStore := expect.NewExpectationsStore()
-	const expectationsKey = "default/test-pcs-0-cyborg"
+	const expectationsKey = "default/test-pcs-0-workers-2-cyborg"
 	require.NoError(t, expectationsStore.ExpectCreations(logr.Discard(), expectationsKey, types.UID("pending-create")))
 
 	r := _resource{expectationsStore: expectationsStore}
@@ -138,16 +138,24 @@ func topologyAffinityInitContainerFixture() (*grovecorev1alpha1.PodCliqueSet, *g
 						},
 					},
 				},
+				PodCliqueScalingGroupConfigs: []grovecorev1alpha1.PodCliqueScalingGroupConfig{{
+					Name:         "workers",
+					CliqueNames:  []string{"lpu", "cyborg"},
+					Replicas:     ptr.To[int32](3),
+					MinAvailable: ptr.To[int32](2),
+				}},
 			},
 		},
 	}
 	pclq := &grovecorev1alpha1.PodClique{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-pcs-0-cyborg",
+			Name:      "test-pcs-0-workers-2-cyborg",
 			Namespace: "default",
 			Labels: map[string]string{
-				apicommon.LabelPartOfKey:                "test-pcs",
-				apicommon.LabelPodCliqueSetReplicaIndex: "0",
+				apicommon.LabelPartOfKey:                         "test-pcs",
+				apicommon.LabelPodCliqueSetReplicaIndex:          "0",
+				apicommon.LabelPodCliqueScalingGroup:             "test-pcs-0-workers",
+				apicommon.LabelPodCliqueScalingGroupReplicaIndex: "2",
 			},
 		},
 		Spec: *pcs.Spec.Template.Cliques[1].Spec.DeepCopy(),
