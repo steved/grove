@@ -104,13 +104,12 @@ cover-html: test-cover
 	@echo "Coverage report generated at coverage.html"
 
 # Run e2e tests against an existing cluster
-# Requires: E2E_USE_EXISTING_CLUSTER=true and a pre-created cluster
+# Requires a pre-created cluster with Grove and Kai Scheduler installed.
 # Usage: make run-e2e [TEST_PATTERN=<pattern>] [DIAG_DIR=<path>] [DIAG_MODE=<mode>]
 # Examples:
 #   make run-e2e                              # Run all tests
 #   make run-e2e TEST_PATTERN=Test_GS         # Run gang scheduling tests
-#   make run-e2e TEST_PATTERN=Test_GS1        # Run specific test
-#   make run-e2e TEST_PATTERN=Test_TAS        # Run topology tests
+#   make run-e2e TEST_PATTERN=Test_GS1        # Run a specific test
 #   GROVE_E2E_DIAG_MODE=both make run-e2e     # Output to stdout and file
 #   GROVE_E2E_DIAG_MODE=stdout make run-e2e   # Output to stdout only
 #
@@ -124,13 +123,13 @@ run-e2e:
 	@echo "> Preparing charts (copying CRDs)..."
 	@$(MODULE_HACK_DIR)/prepare-charts.sh
 	@echo "> Running e2e tests (compilation may take a few minutes with no output)..."
-	@cd e2e && go test -count=1 -tags=e2e ./tests/... -v -timeout 45m $(if $(TEST_PATTERN),-run '$(TEST_PATTERN)')
+	@cd e2e && go test -p=1 -count=1 -tags=e2e ./tests ./tests/update -v -timeout 45m $(if $(TEST_PATTERN),-run '$(TEST_PATTERN)')
 
 # Same as run-e2e but with gotestsum for cleaner pass/fail summaries and colored output
 .PHONY: run-e2e-verbose
 run-e2e-verbose: $(GOTESTSUM)
 	@echo "> Running e2e tests (verbose)..."
-	@cd e2e && $(GOTESTSUM) --format short-verbose -- -count=1 -tags=e2e ./tests/... -timeout 45m $(if $(TEST_PATTERN),-run '$(TEST_PATTERN)')
+	@cd e2e && $(GOTESTSUM) --format short-verbose -- -p=1 -count=1 -tags=e2e ./tests ./tests/update -timeout 45m $(if $(TEST_PATTERN),-run '$(TEST_PATTERN)')
 
 # Run the standalone upgrade test from the latest published GitHub release to
 # the operator built from the current checkout. The test owns its k3d cluster.
@@ -164,7 +163,7 @@ e2e-cluster-down: $(UV)
 .PHONY: run-e2e-full
 run-e2e-full: e2e-cluster-up
 	@echo "> Running e2e tests..."
-	@$(MAKE) run-e2e TEST_PATTERN=$(TEST_PATTERN) || \
+	@$(MAKE) run-e2e TEST_PATTERN='$(TEST_PATTERN)' || \
 		(echo "Tests failed, cleaning up cluster..."; $(MAKE) e2e-cluster-down; exit 1)
 	@echo "> Tests passed, cleaning up cluster..."
 	@$(MAKE) e2e-cluster-down
@@ -202,16 +201,26 @@ e2e-cluster-up-real: export E2E_CLUSTER__WORKER_MEMORY = 150m
 e2e-cluster-up-real: export E2E_KWOK__NODES = 0
 e2e-cluster-up-real: e2e-cluster-up
 
+# Run startup-ordering tests against an existing real-node cluster.
+.PHONY: run-e2e-real
+run-e2e-real: export GROVE_E2E_DIAG_DIR = $(DIAG_DIR)
+run-e2e-real: export GROVE_E2E_DIAG_MODE = $(DIAG_MODE)
+run-e2e-real:
+	@echo "> Preparing charts (copying CRDs)..."
+	@$(MODULE_HACK_DIR)/prepare-charts.sh
+	@echo "> Running e2e tests (compilation may take a few minutes with no output)..."
+	@cd e2e && go test -p=1 -count=1 -tags=e2e,e2ereal ./tests -v -timeout 45m -run '$(if $(TEST_PATTERN),$(TEST_PATTERN),^Test_SO)'
+
 # Full e2e test run on real k3d workers (no KWOK virtual nodes)
 # Creates a 30-node real cluster, runs tests, then cleans up on success or failure.
 # Usage: make run-e2e-real-full [TEST_PATTERN=<pattern>]
 # Examples:
 #   make run-e2e-real-full                          # Run all tests on real nodes
-#   make run-e2e-real-full TEST_PATTERN=Test_GS     # Run gang scheduling tests only
+#   make run-e2e-real-full TEST_PATTERN=Test_SO3    # Run one startup-ordering test
 .PHONY: run-e2e-real-full
 run-e2e-real-full: e2e-cluster-up-real
 	@echo "> Running e2e tests (real nodes)..."
-	@$(MAKE) run-e2e TEST_PATTERN=$(TEST_PATTERN) || \
+	@$(MAKE) run-e2e-real TEST_PATTERN='$(TEST_PATTERN)' || \
 		(echo "Tests failed, cleaning up cluster..."; $(MAKE) e2e-cluster-down; exit 1)
 	@echo "> Tests passed, cleaning up cluster..."
 	@$(MAKE) e2e-cluster-down

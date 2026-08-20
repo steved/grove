@@ -115,6 +115,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - test_name: cascade_deletion
+            test_pattern: "^Test_Cascade"
           - test_name: gang_scheduling
             test_pattern: "^Test_GS"
           - test_name: gang_termination
@@ -198,9 +200,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - test_name: cascade_deletion
           - test_name: gang_scheduling
           - test_name: gang_termination
           - test_name: rolling_updates
+          - test_name: ondelete_updates
           - test_name: startup_ordering
           - test_name: Topology_Aware_Scheduling
           - test_name: cert_management

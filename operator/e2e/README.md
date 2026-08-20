@@ -27,22 +27,18 @@ brew install k3d
 
 ### Running Locally
 
-From the repository root:
-```bash
-make run-e2e
-```
+Create the local KWOK cluster once, then reuse it for as many functional test
+runs as needed:
 
-Or directly from the operator directory:
 ```bash
 cd operator
+make e2e-cluster-up
 make run-e2e
+make e2e-cluster-down
 ```
 
-The test suite will:
-1. Create a k3d cluster with 28 worker nodes
-2. Install Grove, Kai Scheduler, and GPU Operator
-3. Run all e2e testing suites
-4. Clean up the cluster
+`make run-e2e-full` is an alternative that creates the cluster, runs
+the test suite, and deletes the cluster.
 
 ### Running in CI/CD
 

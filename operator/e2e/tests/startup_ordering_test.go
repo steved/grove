@@ -1,4 +1,4 @@
-//go:build e2e
+//go:build e2e && e2ereal
 
 /*
 Copyright 2025 The Grove Authors.
