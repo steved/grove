@@ -23,19 +23,24 @@ import (
 	"time"
 
 	apicommon "github.com/ai-dynamo/grove/operator/api/common"
+	apiconstants "github.com/ai-dynamo/grove/operator/api/common/constants"
+	grovev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/e2e/testctx"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 )
 
 // terminationDelayInWorkloadYAML mirrors spec.template.terminationDelay in
-// operator/e2e/yaml/workload{1,2}-gt.yaml. Tests sleep past this value to
-// give the gang-termination flow a chance to fire (or to confirm it didn't).
-const terminationDelayInWorkloadYAML = 10 * time.Second
+// operator/e2e/yaml/workload{1,2,5}-gt.yaml.
+const terminationDelayInWorkloadYAML = 2 * time.Second
 
-// gangTerminationGrace is how long we wait past terminationDelay before
-// asserting outcomes. Adds slack for reconcile + apiserver latency.
-const gangTerminationGrace = 15 * time.Second
+// noGangTerminationGrace extends a negative assertion beyond the configured
+// termination delay after the controller has observed the pod loss. This
+// catches an incorrectly armed delayed termination without the old 15-second
+// fixed grace on every positive and negative path.
+const noGangTerminationGrace = 2 * time.Second
 
 // totalWL1Pods: pc-a(2) + sg-x[2]*(pc-b(1)+pc-c(3)) = 2 + 2*4 = 10
 // totalWL2Pods: same shape (counts are identical, only minAvailable differs)
@@ -101,13 +106,10 @@ func runFullReplicasScenario(t *testing.T, workloadName, yamlFile, targetCliqueF
 		t.Fatalf("Failed to delete pod %s: %v", target.Name, err)
 	}
 
-	Logger.Infof("4. Wait %s (terminationDelay + grace) for gang termination to fire", terminationDelayInWorkloadYAML+gangTerminationGrace)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
-
-	Logger.Info("5. Verify all PCS-replica pods got recreated (zero original UIDs survive)")
+	Logger.Info("4. Wait for all PCS-replica pods to be recreated (zero original UIDs survive)")
 	verifyAllPodsRecreated(t, tc, originalUIDs, totalWLPods)
 
-	Logger.Info("6. Uncordon the node and verify the recycled gang actually recovers to fully ready")
+	Logger.Info("5. Uncordon the node and verify the recycled gang actually recovers to fully ready")
 	uncordonAndVerifyRecovery(t, tc, []string{target.Spec.NodeName}, totalWLPods)
 }
 
@@ -142,8 +144,7 @@ func Test_GT3_GangTerminationMinReplicasPCSOwned(t *testing.T) {
 
 	Logger.Info("3. Kill 1 ready pod from pc-a (min=1, replicas=2) — expect NO gang termination")
 	survivorsAfterFirstKill, cordonedFirst := cordonAndKillPodsFromClique(ctx, t, tc, targetClique, 1)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
-	verifyNoGangTermination(t, tc, survivorsAfterFirstKill, totalWLPods-1)
+	verifyNoGangTermination(t, tc, targetClique, 1, survivorsAfterFirstKill, totalWLPods-1)
 
 	Logger.Info("4. Kill the remaining ready pod from pc-a (scheduled now 0) — test plan expects all pods terminated")
 	pods, err := tc.ListPods()
@@ -152,7 +153,6 @@ func Test_GT3_GangTerminationMinReplicasPCSOwned(t *testing.T) {
 	}
 	originalUIDs := capturePodUIDs(pods)
 	_, cordonedSecond := cordonAndKillPodsFromClique(ctx, t, tc, targetClique, 1)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 
 	Logger.Info("5. Verify all PCS-replica pods got recreated")
 	verifyAllPodsRecreated(t, tc, originalUIDs, totalWLPods)
@@ -194,8 +194,7 @@ func Test_GT4_GangTerminationMinReplicasPCSGOwned(t *testing.T) {
 
 	Logger.Info("3. Kill 1 ready pod from sg-x-0-pc-c (min=1, replicas=3) — expect NO gang termination")
 	survivorsA, cordonedA := cordonAndKillPodsFromClique(ctx, t, tc, pcsg0Target, 1)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
-	verifyNoGangTermination(t, tc, survivorsA, totalWLPods-1)
+	verifyNoGangTermination(t, tc, pcsg0Target, 2, survivorsA, totalWLPods-1)
 
 	Logger.Info("4. Kill the remaining 2 ready pods from sg-x-0-pc-c — test plan expects PCSG-0 (pc-b-0 + pc-c-0) recreated, workload not gang-terminated")
 	pods, err := tc.ListPods()
@@ -206,7 +205,6 @@ func Test_GT4_GangTerminationMinReplicasPCSGOwned(t *testing.T) {
 	pcsg1OriginalUIDs := capturePodUIDsForPCSGReplica(pods, "1")
 	pcAOriginalUIDs := capturePodUIDsForClique(pods, "workload2-gt-0-pc-a")
 	_, cordonedB := cordonAndKillPodsFromClique(ctx, t, tc, pcsg0Target, 2)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 	// Verify only PCSG-0 pods got recreated; PCSG-1 + pc-a survived intact.
 	// PCSG-0's replacement pods stay Pending from here on (their nodes are cordoned) — that is
 	// load-bearing: step 6 expects PCS-level termination, which requires BOTH PCSG replicas in
@@ -226,12 +224,11 @@ func Test_GT4_GangTerminationMinReplicasPCSGOwned(t *testing.T) {
 	}
 	pcAUIDsBeforeStep5 := capturePodUIDsForClique(pods, "workload2-gt-0-pc-a")
 	_, cordonedC := cordonAndKillPodsFromClique(ctx, t, tc, pcsg1Target, 1)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 	// Exactly 5 pods can be Running here: PCSG-0's 4 replacements are Pending (cordoned nodes,
 	// deliberately — see step 4) and this step killed 1 more, so the floor is pc-a(2) +
 	// pc-b-1(1) + pc-c-1's remaining(2). A higher floor is unsatisfiable while capacity is
 	// withheld; UID survival of pc-a is the primary no-PCS-level-termination signal.
-	verifyNoGangTermination(t, tc, pcAUIDsBeforeStep5, totalWLPods-5)
+	verifyNoGangTermination(t, tc, pcsg1Target, 2, pcAUIDsBeforeStep5, totalWLPods-5)
 
 	Logger.Info("6. Kill the remaining 2 ready pods from sg-x-1-pc-c — test plan expects all PCS pods terminated")
 	pods, err = tc.ListPods()
@@ -240,7 +237,6 @@ func Test_GT4_GangTerminationMinReplicasPCSGOwned(t *testing.T) {
 	}
 	finalOriginalUIDs := capturePodUIDs(pods)
 	_, cordonedD := cordonAndKillPodsFromClique(ctx, t, tc, pcsg1Target, 2)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 	verifyAllPodsRecreated(t, tc, finalOriginalUIDs, totalWLPods)
 
 	Logger.Info("7. Uncordon all nodes cordoned by this test and verify the recycled gang recovers to fully ready")
@@ -290,7 +286,6 @@ func Test_GT5_IndividualPCSGReplicaTermination(t *testing.T) {
 
 	Logger.Infof("4. Kill all 3 pods from %s — should breach only that PCSG replica", pcsg0Target)
 	_, cordoned := cordonAndKillPodsFromClique(ctx, t, tc, pcsg0Target, 3)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 
 	Logger.Info("5. Verify only PCSG-0 was recreated; PCSG-1 and pc-a kept their UIDs")
 	verifyPCSGReplicaRecreatedOnly(t, tc, "0", pcsg0OriginalUIDs, pcsg1OriginalUIDs, pcAOriginalUIDs)
@@ -348,13 +343,10 @@ func Test_GT6_ScaledPodGangPodDeletion(t *testing.T) {
 		t.Fatalf("Failed to delete pod: %v", err)
 	}
 
-	Logger.Infof("5. Wait %s — base PodGang min still met, no PCS-level gang term should fire", terminationDelayInWorkloadYAML+gangTerminationGrace)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
+	Logger.Info("5. Verify the target clique remains healthy beyond terminationDelay and pc-a keeps its UIDs")
+	verifyNoGangTermination(t, tc, scaled.Labels[apicommon.LabelPodClique], 2, pcAUIDs, totalWLPods-1)
 
-	Logger.Info("6. Verify pc-a (standalone PCLQ) kept its UIDs — only PCS-level gang term would delete pc-a")
-	verifyNoGangTermination(t, tc, pcAUIDs, totalWLPods-1)
-
-	Logger.Info("7. Uncordon the node and verify the deleted scaled pod's replacement actually becomes ready")
+	Logger.Info("6. Uncordon the node and verify the deleted scaled pod's replacement actually becomes ready")
 	// The replacement pod cannot schedule while the node stays cordoned (the harness runs with
 	// exactly totalWLPods schedulable nodes), so capacity must be released before asserting it.
 	uncordonAndVerifyRecovery(t, tc, []string{scaled.Spec.NodeName}, totalWLPods)
@@ -568,36 +560,94 @@ func uncordonAndVerifyRecovery(t *testing.T, tc *testctx.TestContext, cordonedNo
 	Logger.Infof("Recovery confirmed: %d pods ready after uncordoning %d nodes", expectedPods, len(cordonedNodes))
 }
 
-// verifyNoGangTermination asserts that the workload did NOT gang-terminate by
-// confirming all expected survivors are still present after the wait. Used for
-// the "min-replicas not yet breached" steps.
-func verifyNoGangTermination(t *testing.T, tc *testctx.TestContext, expectedSurvivors map[types.UID]struct{}, minRunning int) {
+// verifyNoGangTermination waits until the PodClique controller has observed a
+// tolerated pod loss, then verifies the workload remains intact beyond the
+// configured termination delay.
+func verifyNoGangTermination(
+	t *testing.T,
+	tc *testctx.TestContext,
+	cliqueName string,
+	expectedScheduled int32,
+	expectedSurvivors map[types.UID]struct{},
+	minRunning int,
+) {
 	t.Helper()
+
+	observationDeadline := time.Now().Add(tc.Timeout)
+	for {
+		var pclq grovev1alpha1.PodClique
+		if err := tc.Client.Get(tc.Ctx, types.NamespacedName{Namespace: tc.Namespace, Name: cliqueName}, &pclq); err != nil {
+			t.Fatalf("failed to get PodClique %s: %v", cliqueName, err)
+		}
+		condition := meta.FindStatusCondition(pclq.Status.Conditions, apiconstants.ConditionTypeMinAvailableBreached)
+		if pclq.Status.ScheduledReplicas == expectedScheduled && condition != nil && condition.Status == metav1.ConditionFalse {
+			break
+		}
+		if time.Now().After(observationDeadline) {
+			conditionStatus := metav1.ConditionUnknown
+			if condition != nil {
+				conditionStatus = condition.Status
+			}
+			t.Fatalf("PodClique %s did not observe the tolerated pod loss within %s: scheduled=%d/%d MinAvailableBreached=%s",
+				cliqueName, tc.Timeout, pclq.Status.ScheduledReplicas, expectedScheduled, conditionStatus)
+		}
+		time.Sleep(tc.Interval)
+	}
+
+	stabilityWindow := terminationDelayInWorkloadYAML + noGangTerminationGrace
+	timer := time.NewTimer(stabilityWindow)
+	select {
+	case <-tc.Ctx.Done():
+		timer.Stop()
+		t.Fatalf("context cancelled while verifying no gang termination: %v", tc.Ctx.Err())
+	case <-timer.C:
+	}
+
+	var pclq grovev1alpha1.PodClique
+	if err := tc.Client.Get(tc.Ctx, types.NamespacedName{Namespace: tc.Namespace, Name: cliqueName}, &pclq); err != nil {
+		t.Fatalf("failed to get PodClique %s after %s no-gang-termination window: %v", cliqueName, stabilityWindow, err)
+	}
+	condition := meta.FindStatusCondition(pclq.Status.Conditions, apiconstants.ConditionTypeMinAvailableBreached)
+	if condition == nil || condition.Status != metav1.ConditionFalse {
+		conditionStatus := metav1.ConditionUnknown
+		if condition != nil {
+			conditionStatus = condition.Status
+		}
+		t.Fatalf("PodClique %s did not remain healthy through the %s no-gang-termination window: MinAvailableBreached=%s",
+			cliqueName, stabilityWindow, conditionStatus)
+	}
+
 	pods, err := tc.ListPods()
 	if err != nil {
-		t.Fatalf("Failed to list pods during no-gang-term check: %v", err)
+		t.Fatalf("failed to list pods after %s no-gang-termination window: %v", stabilityWindow, err)
 	}
-	currentUIDs := make(map[types.UID]struct{}, len(pods.Items))
+	currentUIDs := make(map[types.UID]bool, len(pods.Items))
 	running := 0
 	for _, p := range pods.Items {
-		currentUIDs[p.UID] = struct{}{}
+		currentUIDs[p.UID] = p.DeletionTimestamp == nil
 		if p.Status.Phase == corev1.PodRunning && p.DeletionTimestamp == nil {
 			running++
 		}
 	}
-	survived := 0
+	missing, terminating := 0, 0
 	for uid := range expectedSurvivors {
-		if _, ok := currentUIDs[uid]; ok {
-			survived++
+		nonTerminating, found := currentUIDs[uid]
+		if !found {
+			missing++
+		} else if !nonTerminating {
+			terminating++
 		}
 	}
-	if survived != len(expectedSurvivors) {
-		t.Fatalf("expected gang termination to NOT have fired: %d/%d expected-survivor UIDs are missing", len(expectedSurvivors)-survived, len(expectedSurvivors))
+	if missing > 0 || terminating > 0 {
+		t.Fatalf("expected survivor UIDs did not remain intact through the %s no-gang-termination window: missing=%d terminating=%d total=%d",
+			stabilityWindow, missing, terminating, len(expectedSurvivors))
 	}
 	if running < minRunning {
-		t.Fatalf("expected at least %d running pods (no gang termination), got %d", minRunning, running)
+		t.Fatalf("expected at least %d running pods after the %s no-gang-termination window, got %d", minRunning, stabilityWindow, running)
 	}
-	Logger.Infof("No gang termination confirmed: %d/%d expected-survivor UIDs present, %d running", survived, len(expectedSurvivors), running)
+
+	Logger.Infof("No gang termination confirmed for %s: %d survivor UIDs remained non-terminating with %d running pods for %s",
+		cliqueName, len(expectedSurvivors), running, stabilityWindow)
 }
 
 // verifyPCSGReplicaRecreatedOnly asserts that only the pods of the specified

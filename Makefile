@@ -121,7 +121,7 @@ cover-html:
 .PHONY: run-e2e
 run-e2e:
 	@echo "> Running e2e tests for operator"
-	@make --directory=operator run-e2e
+	@$(MAKE) --directory=operator run-e2e
 
 # Runs the standalone latest-release-to-current operator upgrade test.
 .PHONY: run-upgrade-e2e

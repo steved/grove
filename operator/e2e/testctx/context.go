@@ -42,7 +42,7 @@ const (
 	// DefaultPollTimeout is the timeout for most polling conditions
 	DefaultPollTimeout = 4 * time.Minute
 	// DefaultPollInterval is the interval for most polling conditions
-	DefaultPollInterval = 5 * time.Second
+	DefaultPollInterval = time.Second
 )
 
 // WorkloadConfig defines configuration for deploying and verifying a workload.
@@ -380,12 +380,35 @@ func (tc *TestContext) UncordonNodesAndWaitForPods(nodes []string, expectedPods 
 	}
 }
 
-// VerifyAllPodsArePendingWithSleep verifies all pods are pending after a fixed delay.
-func (tc *TestContext) VerifyAllPodsArePendingWithSleep() {
+// VerifyPendingPodsObserved waits until every workload pod is Pending and is
+// either held by a scheduling gate or has exact-current-UID scheduler evidence.
+func (tc *TestContext) VerifyPendingPodsObserved(expectedPods int) {
 	tc.T.Helper()
-	time.Sleep(30 * time.Second)
-	if err := tc.VerifyAllPodsArePending(); err != nil {
-		tc.T.Fatalf("Failed to verify all pods are pending: %v", err)
+	if err := tc.newPodManager().WaitForPendingPodsObserved(
+		tc.Ctx,
+		tc.Namespace,
+		tc.GetLabelSelector(),
+		expectedPods,
+		tc.Timeout,
+		tc.Interval,
+	); err != nil {
+		tc.T.Fatalf("Failed to verify %d pending pods were observed: %v", expectedPods, err)
+	}
+}
+
+// VerifyPendingPodsAreUngatedWithSchedulerEvidence waits until every current
+// Pending pod is ungated and has exact-current-UID scheduler evidence.
+func (tc *TestContext) VerifyPendingPodsAreUngatedWithSchedulerEvidence(expectedPendingPods int) {
+	tc.T.Helper()
+	if err := tc.newPodManager().WaitForUngatedUnschedulableEvents(
+		tc.Ctx,
+		tc.Namespace,
+		tc.GetLabelSelector(),
+		expectedPendingPods,
+		tc.Timeout,
+		tc.Interval,
+	); err != nil {
+		tc.T.Fatalf("Failed to verify %d pending pods are ungated with scheduler evidence: %v", expectedPendingPods, err)
 	}
 }
 

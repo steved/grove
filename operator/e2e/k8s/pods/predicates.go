@@ -24,6 +24,7 @@ import (
 	kubeutils "github.com/ai-dynamo/grove/operator/internal/utils/kubernetes"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -142,5 +143,60 @@ func HasUnschedulableEvents(ctx context.Context, cl client.Reader, namespace str
 			return false
 		}
 		return podsWithUnschedulableEvent == pendingCount
+	}
+}
+
+// HasPendingPodsObserved checks that the expected Pending pods are either held
+// by a scheduling gate or have an exact-current-UID KAI Unschedulable event.
+func HasPendingPodsObserved(ctx context.Context, cl client.Reader, namespace string, expectedPendingCount int) waiter.Predicate[*v1.PodList] {
+	return hasPendingPodsObserved(ctx, cl, namespace, expectedPendingCount, false)
+}
+
+// HasUngatedUnschedulableEvents additionally requires all Pending pods to have
+// been released from their scheduling gates.
+func HasUngatedUnschedulableEvents(ctx context.Context, cl client.Reader, namespace string, expectedPendingCount int) waiter.Predicate[*v1.PodList] {
+	return hasPendingPodsObserved(ctx, cl, namespace, expectedPendingCount, true)
+}
+
+func hasPendingPodsObserved(ctx context.Context, cl client.Reader, namespace string, expectedPendingCount int, requireUngated bool) waiter.Predicate[*v1.PodList] {
+	return func(podList *v1.PodList) bool {
+		var eventList v1.EventList
+		if err := cl.List(ctx, &eventList, client.InNamespace(namespace)); err != nil {
+			return false
+		}
+
+		observedPodUIDs := make(map[types.UID]struct{})
+		for i := range eventList.Items {
+			event := &eventList.Items[i]
+			if event.InvolvedObject.Kind != "Pod" || event.InvolvedObject.UID == "" ||
+				event.Type != v1.EventTypeWarning {
+				continue
+			}
+			if event.Reason == "Unschedulable" && event.Source.Component == "kai-scheduler" {
+				observedPodUIDs[event.InvolvedObject.UID] = struct{}{}
+			}
+		}
+
+		pendingCount := 0
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Status.Phase != v1.PodPending {
+				continue
+			}
+			pendingCount++
+			if len(pod.Spec.SchedulingGates) > 0 {
+				if requireUngated {
+					return false
+				}
+				continue
+			}
+			if pod.UID == "" {
+				return false
+			}
+			if _, observed := observedPodUIDs[pod.UID]; !observed {
+				return false
+			}
+		}
+		return pendingCount > 0 && (expectedPendingCount <= 0 || pendingCount == expectedPendingCount)
 	}
 }

@@ -160,6 +160,24 @@ func (pm *PodManager) WaitForUnschedulableEvents(ctx context.Context, namespace,
 	return err
 }
 
+// WaitForPendingPodsObserved waits until the expected Pending pods are either
+// gated or have exact-current-UID scheduler evidence.
+func (pm *PodManager) WaitForPendingPodsObserved(ctx context.Context, namespace, labelSelector string, expectedPendingCount int, timeout, interval time.Duration) error {
+	fetchPods := pm.FetchFunc(ctx, namespace, labelSelector)
+	w := waiter.New[*v1.PodList]().WithTimeout(timeout).WithInterval(interval)
+	_, err := w.WaitFor(ctx, fetchPods, HasPendingPodsObserved(ctx, pm.cl, namespace, expectedPendingCount))
+	return err
+}
+
+// WaitForUngatedUnschedulableEvents waits until every Pending pod is ungated
+// and has exact-current-UID scheduler evidence.
+func (pm *PodManager) WaitForUngatedUnschedulableEvents(ctx context.Context, namespace, labelSelector string, expectedPendingCount int, timeout, interval time.Duration) error {
+	fetchPods := pm.FetchFunc(ctx, namespace, labelSelector)
+	w := waiter.New[*v1.PodList]().WithTimeout(timeout).WithInterval(interval)
+	_, err := w.WaitFor(ctx, fetchPods, HasUngatedUnschedulableEvents(ctx, pm.cl, namespace, expectedPendingCount))
+	return err
+}
+
 // WaitForMatchingPhases waits for pods to reach expected total and pending counts, and returns the phase counts.
 func (pm *PodManager) WaitForMatchingPhases(ctx context.Context, namespace, labelSelector string, expectedTotal, expectedPending int, timeout, interval time.Duration) (PodPhaseCount, error) {
 	fetchPods := pm.FetchFunc(ctx, namespace, labelSelector)

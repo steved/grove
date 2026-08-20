@@ -306,7 +306,7 @@ func Test_GS5_GangSchedulingWithMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	tc.UncordonNodes(nodesToCordon[:1])
 
@@ -373,7 +373,7 @@ func Test_GS6_GangSchedulingWithPCSGScalingMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Uncordon 1 node and verify a total of 3 pods get scheduled (pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1})")
 	// Based on workload2 min-replicas: pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1}
@@ -485,7 +485,7 @@ func Test_GS7_GangSchedulingWithPCSGScalingMinReplicasAdvanced1(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Uncordon 1 node and verify a total of 3 pods get scheduled (pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1})")
 	firstNodeToUncordon := nodesToCordon[0]
@@ -578,9 +578,10 @@ func Test_GS7_GangSchedulingWithPCSGScalingMinReplicasAdvanced1(t *testing.T) {
 // 5. Verify all 14 newly created pods are pending due to insufficient resources
 // 6. Uncordon 1 node and verify a total of 3 pods get scheduled (pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1})
 // 7. Wait for scheduled pods to become ready
-// 8. Uncordon 4 nodes and verify 4 more pods get scheduled (pcs-0-{sg-x-1-pc-b=1, sg-x-1-pc-c=1}, pcs-0-{sg-x-2-pc-b=1, sg-x-2-pc-c=1})
-// 9. Wait for scheduled pods to become ready
-// 10. Uncordon 7 nodes and verify the remaining workload pods get scheduled
+// 8. Verify the remaining pods are ungated and observed by KAI
+// 9. Uncordon 4 nodes and verify 4 more pods get scheduled (pcs-0-{sg-x-1-pc-b=1, sg-x-1-pc-c=1}, pcs-0-{sg-x-2-pc-b=1, sg-x-2-pc-c=1})
+// 10. Wait for scheduled pods to become ready
+// 11. Uncordon 7 nodes and verify the remaining workload pods get scheduled
 func Test_GS8_GangSchedulingWithPCSGScalingMinReplicasAdvanced2(t *testing.T) {
 	ctx := context.Background()
 
@@ -606,7 +607,7 @@ func Test_GS8_GangSchedulingWithPCSGScalingMinReplicasAdvanced2(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Set pcs-0-sg-x resource replicas equal to 3, verify 4 more newly created pods")
 	pcsgName := "workload2-0-sg-x"
@@ -614,7 +615,7 @@ func Test_GS8_GangSchedulingWithPCSGScalingMinReplicasAdvanced2(t *testing.T) {
 	tc.ScalePCSGInstanceAndWait(pcsgName, 3, expectedPodsAfterScaling, expectedPodsAfterScaling)
 
 	Logger.Info("5. Verify all 14 newly created pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(expectedPodsAfterScaling)
 
 	Logger.Info("6. Uncordon 1 node and verify a total of 3 pods get scheduled (pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1})")
 	firstNodeToUncordon := nodesToCordon[0]
@@ -633,7 +634,10 @@ func Test_GS8_GangSchedulingWithPCSGScalingMinReplicasAdvanced2(t *testing.T) {
 		t.Fatalf("Failed to wait for 3 scheduled pods to become ready: %v", err)
 	}
 
-	Logger.Info("8. Uncordon 4 nodes and verify 4 more pods get scheduled")
+	Logger.Info("8. Verify the remaining pods are ungated and observed by KAI")
+	tc.VerifyPendingPodsAreUngatedWithSchedulerEvidence(11)
+
+	Logger.Info("9. Uncordon 4 nodes and verify 4 more pods get scheduled")
 	fourNodesToUncordon := nodesToCordon[1:5]
 	tc.UncordonNodes(fourNodesToUncordon)
 
@@ -643,12 +647,12 @@ func Test_GS8_GangSchedulingWithPCSGScalingMinReplicasAdvanced2(t *testing.T) {
 		t.Fatalf("Failed to wait for exactly 4 more pods to be scheduled: %v", err)
 	}
 
-	Logger.Info("9. Wait for scheduled pods to become ready")
+	Logger.Info("10. Wait for scheduled pods to become ready")
 	if err := tc.WaitForReadyPods(7); err != nil {
 		t.Fatalf("Failed to wait for 7 scheduled pods to become ready: %v", err)
 	}
 
-	Logger.Info("10. Uncordon 7 nodes and verify the remaining workload pods get scheduled")
+	Logger.Info("11. Uncordon 7 nodes and verify the remaining workload pods get scheduled")
 	remainingNodesToUncordon := nodesToCordon[5:]
 	tc.UncordonNodes(remainingNodesToUncordon)
 
@@ -701,7 +705,7 @@ func Test_GS9_GangSchedulingWithPCSScalingMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Uncordon 1 node and verify a total of 3 pods get scheduled (pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1})")
 	firstNodeToUncordon := nodesToCordon[0]
@@ -803,8 +807,7 @@ func Test_GS10_GangSchedulingWithPCSScalingMinReplicasAdvanced(t *testing.T) {
 		t.Fatalf("Failed to deploy workload: %v", err)
 	}
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	// Need to use a sleep here unfortunately, see: https://github.com/NVIDIA/grove/issues/226
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Set PCS resource replicas equal to 2, then verify 10 more newly created pods")
 	pcsName := "workload2"
@@ -814,7 +817,7 @@ func Test_GS10_GangSchedulingWithPCSScalingMinReplicasAdvanced(t *testing.T) {
 	tc.ScalePCSAndWait(pcsName, 2, expectedPodsAfterScaling, expectedPodsAfterScaling)
 
 	Logger.Info("5. Verify all 20 newly created pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(expectedPodsAfterScaling)
 
 	Logger.Info("6. Uncordon 4 nodes and verify a total of 6 pods get scheduled")
 	fourNodesToUncordon := nodesToCordon[0:4]
@@ -908,7 +911,7 @@ func Test_GS11_GangSchedulingWithPCSAndPCSGScalingMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Uncordon 1 node")
 	firstNodeToUncordon := nodesToCordon[0]
@@ -1050,7 +1053,7 @@ func Test_GS12_GangSchedulingWithComplexPCSGScaling(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved(10)
 
 	Logger.Info("4. Set pcs resource replicas equal to 2, then verify 10 more newly created pods")
 	tc.ScalePCSAndWait("workload2", 2, 20, 20)
