@@ -59,8 +59,10 @@ def _pull_tag_push(
     full_image = f"{image_name}:{version}"
     registry_image = f"localhost:{registry_port}/{image_name}:{version}"
     try:
-        docker_client.images.pull(full_image)
-        image = docker_client.images.get(full_image)
+        try:
+            image = docker_client.images.get(full_image)
+        except docker.errors.ImageNotFound:
+            image = docker_client.images.pull(full_image)
         image.tag(registry_image)
         docker_client.images.push(registry_image, stream=False)
         return (image_name, True, None)

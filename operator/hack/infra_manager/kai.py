@@ -35,11 +35,12 @@ from infra_manager.constants import (
 )
 
 
-def install_kai_scheduler(cfg: KaiConfig) -> None:
+def install_kai_scheduler(cfg: KaiConfig, image_registry: str | None = None) -> None:
     """Install Kai Scheduler using Helm.
 
     Args:
         cfg: Kai Scheduler configuration with the version.
+        image_registry: Optional registry containing Kai component images.
     """
     console.print(Panel.fit("Installing Kai Scheduler", style="bold blue"))
     console.print(f"[yellow]Version: {cfg.version}[/yellow]")
@@ -48,6 +49,7 @@ def install_kai_scheduler(cfg: KaiConfig) -> None:
         console.print("[yellow]   Removed existing Kai Scheduler release[/yellow]")
     except sh.ErrorReturnCode_1:
         console.print("[yellow]   No existing Kai Scheduler release found[/yellow]")
+    image_registry_args = ["--set", f"global.registry={image_registry}"] if image_registry is not None else []
     sh.helm(
         "install",
         HELM_RELEASE_KAI,
@@ -57,6 +59,7 @@ def install_kai_scheduler(cfg: KaiConfig) -> None:
         "--namespace",
         NS_KAI_SCHEDULER,
         "--create-namespace",
+        *image_registry_args,
         "--set",
         f"global.tolerations[0].key={LABEL_CONTROL_PLANE}",
         "--set",

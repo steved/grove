@@ -50,7 +50,7 @@ from infra_manager.constants import (
     dep_value,
 )
 from infra_manager.kwok import create_nodes, install_kwok_controller
-from infra_manager.utils import require_command
+from infra_manager.utils import require_command, resolve_registry_repos
 
 
 def _check_prerequisites(install_kai: bool, install_grove: bool, grove_mode: str, operator_dir: Path) -> None:
@@ -140,6 +140,16 @@ def _run_prepull(registry_port: int) -> None:
     prepull_image_groups(groups, registry_port)
 
 
+def _run_kai_install(cfg: SetupConfig, do_prepull: bool) -> None:
+    """Populate the local registry, then install Kai from it when pre-pulling is enabled."""
+    image_registry = None
+    if do_prepull:
+        _run_prepull(cfg.cluster.registry_port)
+        _, pull_repo = resolve_registry_repos(cfg.cluster.registry_port)
+        image_registry = f"{pull_repo}/ghcr.io/kai-scheduler/kai-scheduler"
+    install_kai_scheduler(cfg.scheduler.kai, image_registry)
+
+
 def _run_kai_post_install(operator_dir: Path) -> None:
     """Wait for Kai deployments and create queues.
 
@@ -208,10 +218,10 @@ def run_setup(cfg: SetupConfig) -> None:
     parallel_tasks: dict[str, Callable[[], None]] = {}
     if cfg.cluster.create:
         parallel_tasks["topology"] = apply_topology_labels
-    if do_prepull:
-        parallel_tasks["prepull"] = lambda: _run_prepull(cfg.cluster.registry_port)
     if cfg.scheduler.kai.enabled:
-        parallel_tasks["kai"] = lambda: install_kai_scheduler(cfg.scheduler.kai)
+        parallel_tasks["kai"] = lambda: _run_kai_install(cfg, do_prepull)
+    elif do_prepull:
+        parallel_tasks["prepull"] = lambda: _run_prepull(cfg.cluster.registry_port)
     if cfg.grove.enabled:
         parallel_tasks["grove"] = lambda: deploy_grove_operator(cfg.grove, cfg.cluster, operator_dir)
     if cfg.pyroscope.enabled:
