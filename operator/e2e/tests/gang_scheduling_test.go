@@ -1052,7 +1052,7 @@ func Test_GS12_GangSchedulingWithComplexPCSGScaling(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved()
 
 	Logger.Info("4. Set pcs resource replicas equal to 2, then verify 10 more newly created pods")
 	tc.ScalePCSAndWait("workload2", 2, 20, 20)

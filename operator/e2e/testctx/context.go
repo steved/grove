@@ -380,15 +380,6 @@ func (tc *TestContext) UncordonNodesAndWaitForPods(nodes []string, expectedPods 
 	}
 }
 
-// VerifyAllPodsArePendingWithSleep verifies all pods are pending after a fixed delay.
-func (tc *TestContext) VerifyAllPodsArePendingWithSleep() {
-	tc.T.Helper()
-	time.Sleep(30 * time.Second)
-	if err := tc.VerifyAllPodsArePending(); err != nil {
-		tc.T.Fatalf("Failed to verify all pods are pending: %v", err)
-	}
-}
-
 // VerifyPendingPodsObserved verifies all pods are pending and either
 // scheduling-gated or observed as unschedulable by the scheduler.
 func (tc *TestContext) VerifyPendingPodsObserved() {
