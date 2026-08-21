@@ -373,7 +373,7 @@ func Test_GS6_GangSchedulingWithPCSGScalingMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved()
 
 	Logger.Info("4. Uncordon 1 node and verify a total of 3 pods get scheduled (pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1})")
 	// Based on workload2 min-replicas: pcs-0-{pc-a=1, sg-x-0-pc-b=1, sg-x-0-pc-c=1}
