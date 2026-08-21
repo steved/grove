@@ -306,7 +306,7 @@ func Test_GS5_GangSchedulingWithMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved()
 
 	tc.UncordonNodes(nodesToCordon[:1])
 

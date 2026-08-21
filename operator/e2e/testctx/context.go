@@ -389,6 +389,15 @@ func (tc *TestContext) VerifyAllPodsArePendingWithSleep() {
 	}
 }
 
+// VerifyPendingPodsObserved verifies all pods are pending and either
+// scheduling-gated or observed as unschedulable by the scheduler.
+func (tc *TestContext) VerifyPendingPodsObserved() {
+	tc.T.Helper()
+	if err := tc.newPodManager().WaitForAllPendingObserved(tc.Ctx, tc.Namespace, tc.GetLabelSelector(), tc.Timeout, tc.Interval); err != nil {
+		tc.T.Fatalf("Failed to verify pending pods were observed: %v", err)
+	}
+}
+
 // WaitForPodConditions polls until the expected pod state is reached.
 func (tc *TestContext) WaitForPodConditions(expectedTotalPods, expectedPending int) (int, int, int, error) {
 	count, err := tc.newPodManager().WaitForMatchingPhases(tc.Ctx, tc.Namespace, tc.GetLabelSelector(), expectedTotalPods, expectedPending, tc.Timeout, tc.Interval)

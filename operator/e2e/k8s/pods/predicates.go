@@ -87,6 +87,36 @@ func AllPending() waiter.Predicate[*v1.PodList] {
 	}
 }
 
+// AllPendingObserved returns a Predicate that checks all pods are pending and
+// either scheduling-gated or observed as unschedulable by the scheduler.
+func AllPendingObserved() waiter.Predicate[*v1.PodList] {
+	return func(podList *v1.PodList) bool {
+		if len(podList.Items) == 0 {
+			return false
+		}
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if pod.Status.Phase != v1.PodPending {
+				return false
+			}
+			if len(pod.Spec.SchedulingGates) > 0 {
+				continue
+			}
+			observed := false
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type == v1.PodScheduled && condition.Status == v1.ConditionFalse && condition.Reason == v1.PodReasonUnschedulable {
+					observed = true
+					break
+				}
+			}
+			if !observed {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 // CountEquals returns a Predicate that checks the pod list has exactly n items.
 func CountEquals(n int) waiter.Predicate[*v1.PodList] {
 	return func(pods *v1.PodList) bool { return len(pods.Items) == n }

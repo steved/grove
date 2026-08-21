@@ -151,6 +151,15 @@ func (pm *PodManager) WaitForAllPending(ctx context.Context, namespace, labelSel
 	return err
 }
 
+// WaitForAllPendingObserved waits until all pods are pending and either
+// scheduling-gated or observed as unschedulable by the scheduler.
+func (pm *PodManager) WaitForAllPendingObserved(ctx context.Context, namespace, labelSelector string, timeout, interval time.Duration) error {
+	fetchPods := pm.FetchFunc(ctx, namespace, labelSelector)
+	w := waiter.New[*v1.PodList]().WithTimeout(timeout).WithInterval(interval)
+	_, err := w.WaitFor(ctx, fetchPods, AllPendingObserved())
+	return err
+}
+
 // WaitForUnschedulableEvents waits until all pending pods have Unschedulable or PodGrouperWarning events.
 // Pass expectedPendingCount > 0 to validate the pending pod count; pass 0 to skip.
 func (pm *PodManager) WaitForUnschedulableEvents(ctx context.Context, namespace, labelSelector string, expectedPendingCount int, timeout, interval time.Duration) error {
