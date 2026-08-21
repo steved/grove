@@ -1174,16 +1174,42 @@ func waitForOnDeleteUpdateComplete(tc *testctx.TestContext) error {
 			// A transient cache miss returns a nil object. Keep polling.
 			return false
 		}
-		if workload.IsOnDeleteUpdateComplete(pcs) {
-			tests.Logger.Debugf("[waitForOnDeleteUpdateComplete] OnDelete update marked complete after %d polls (UpdatedReplicas=%d)",
-				pollCount, pcs.Status.UpdatedReplicas)
-			return true
-		}
-		return false
+		return workload.IsOnDeleteUpdateComplete(pcs) && pcs.Status.CurrentGenerationHash != nil &&
+			pcs.Status.ObservedGeneration != nil && *pcs.Status.ObservedGeneration == pcs.Generation
 	})
 	w := waiter.New[*grovev1alpha1.PodCliqueSet]().WithTimeout(tc.Timeout).WithInterval(tc.Interval)
-	_, err := w.WaitFor(tc.Ctx, fetchPCS, predicate)
-	return err
+	pcs, err := w.WaitFor(tc.Ctx, fetchPCS, predicate)
+	if err != nil {
+		return err
+	}
+
+	fetchPCLQs := waiter.FetchFunc[*grovev1alpha1.PodCliqueList](func(ctx context.Context) (*grovev1alpha1.PodCliqueList, error) {
+		var pclqs grovev1alpha1.PodCliqueList
+		err := tc.Client.List(ctx, &pclqs,
+			client.InNamespace(tc.Namespace),
+			client.MatchingLabels{common.LabelPartOfKey: tc.Workload.Name},
+		)
+		return &pclqs, err
+	})
+	childrenReconciled := waiter.Predicate[*grovev1alpha1.PodCliqueList](func(pclqs *grovev1alpha1.PodCliqueList) bool {
+		for i := range pclqs.Items {
+			pclq := &pclqs.Items[i]
+			if pclq.Status.UpdateProgress == nil ||
+				pclq.Status.UpdateProgress.PodCliqueSetGenerationHash != *pcs.Status.CurrentGenerationHash ||
+				pclq.Status.UpdateProgress.PodTemplateHash != pclq.Labels[common.LabelPodTemplateHash] ||
+				pclq.Status.ObservedGeneration == nil || *pclq.Status.ObservedGeneration != pclq.Generation {
+				return false
+			}
+		}
+		return true
+	})
+	childrenWaiter := waiter.New[*grovev1alpha1.PodCliqueList]().WithTimeout(tc.Timeout).WithInterval(tc.Interval)
+	if _, err = childrenWaiter.WaitFor(tc.Ctx, fetchPCLQs, childrenReconciled); err != nil {
+		return err
+	}
+	tests.Logger.Debugf("[waitForOnDeleteUpdateComplete] OnDelete update marked complete after %d polls (UpdatedReplicas=%d)",
+		pollCount, pcs.Status.UpdatedReplicas)
+	return nil
 }
 
 func verifyUpdateProgressFields(tc *testctx.TestContext) {
@@ -1258,8 +1284,6 @@ func verifyNoAutomaticDeletionAfterUpdate(
 	verifyProgressFields bool,
 ) {
 	tc.T.Helper()
-
-	time.Sleep(10 * time.Second)
 
 	if err := waitForOnDeleteUpdateCompleteWithTimeout(tc, 1*time.Minute); err != nil {
 		tc.T.Fatalf("Failed to verify OnDelete update completion: %v", err)
