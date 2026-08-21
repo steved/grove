@@ -910,7 +910,7 @@ func Test_GS11_GangSchedulingWithPCSAndPCSGScalingMinReplicas(t *testing.T) {
 	}
 
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved()
 
 	Logger.Info("4. Uncordon 1 node")
 	firstNodeToUncordon := nodesToCordon[0]
