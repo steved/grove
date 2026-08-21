@@ -34,7 +34,7 @@ import (
 // terminationDelayInWorkloadYAML mirrors spec.template.terminationDelay in
 // operator/e2e/yaml/workload{1,2}-gt.yaml. Tests sleep past this value to
 // give the gang-termination flow a chance to fire (or to confirm it didn't).
-const terminationDelayInWorkloadYAML = 10 * time.Second
+const terminationDelayInWorkloadYAML = time.Second
 
 // gangTerminationGrace is how long we wait past terminationDelay before
 // asserting outcomes. Adds slack for reconcile + apiserver latency.
