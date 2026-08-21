@@ -22,14 +22,15 @@ import (
 	"time"
 
 	"github.com/ai-dynamo/grove/operator/e2e/k8s"
+	"github.com/ai-dynamo/grove/operator/e2e/k8s/k8sclient"
 	k8spods "github.com/ai-dynamo/grove/operator/e2e/k8s/pods"
 	"github.com/ai-dynamo/grove/operator/e2e/setup"
+	"github.com/ai-dynamo/grove/operator/e2e/waiter"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -41,38 +42,6 @@ var groveCRDNames = []string{
 	"clustertopologybindings.grove.io",
 	"podgangmaps.grove.io",
 	"podgangs.scheduler.grove.io",
-}
-
-// crdInstallerGroveConfig returns a GroveConfig with the crd-installer init container enabled.
-func crdInstallerGroveConfig() *setup.GroveConfig {
-	return &setup.GroveConfig{
-		InstallCRDs: true,
-	}
-}
-
-// defaultGroveConfig returns a GroveConfig with the crd-installer init container disabled (the default).
-func defaultGroveConfig() *setup.GroveConfig {
-	return &setup.GroveConfig{
-		InstallCRDs: false,
-	}
-}
-
-// enableCRDInstaller enables the crd-installer init container via Helm upgrade and returns a cleanup
-// function that restores the default configuration (crdInstaller.enabled=false).
-func enableCRDInstaller(t *testing.T, ctx context.Context, restConfig *rest.Config) func() {
-	t.Helper()
-	chartDir, err := setup.GetGroveChartDir()
-	if err != nil {
-		t.Fatalf("failed to get Grove chart directory: %v", err)
-	}
-	if err := setup.UpdateGroveConfiguration(ctx, restConfig, chartDir, crdInstallerGroveConfig(), Logger); err != nil {
-		t.Fatalf("failed to enable crd-installer: %v", err)
-	}
-	return func() {
-		if err := setup.UpdateGroveConfiguration(ctx, restConfig, chartDir, defaultGroveConfig(), Logger); err != nil {
-			t.Fatalf("failed to restore default Grove config after test: %v", err)
-		}
-	}
 }
 
 // Test_CRD_Installer_AllCRDsExist verifies that all 6 Grove CRDs are present and
@@ -121,10 +90,6 @@ func Test_CRD_Installer_InitContainerCompleted(t *testing.T) {
 	sharedCluster := setup.SharedCluster(Logger)
 	k8sClient := sharedCluster.GetClient()
 
-	// Enable the crd-installer init container for this test and restore the default when done.
-	disableCRDInstaller := enableCRDInstaller(t, ctx, k8sClient.RestConfig)
-	defer disableCRDInstaller()
-
 	var podList v1.PodList
 	if err := k8sClient.List(ctx, &podList, client.InNamespace(setup.OperatorNamespace), setup.OperatorPodLabels); err != nil {
 		t.Fatalf("failed to list operator pods: %v", err)
@@ -165,10 +130,6 @@ func Test_CRD_Installer_Idempotent(t *testing.T) {
 	sharedCluster := setup.SharedCluster(Logger)
 	k8sClient := sharedCluster.GetClient()
 
-	// Enable the crd-installer init container for this test and restore the default when done.
-	disableCRDInstaller := enableCRDInstaller(t, ctx, k8sClient.RestConfig)
-	defer disableCRDInstaller()
-
 	// Get the current operator pod name.
 	var podList v1.PodList
 	if err := k8sClient.List(ctx, &podList, client.InNamespace(setup.OperatorNamespace), setup.OperatorPodLabels); err != nil || len(podList.Items) == 0 {
@@ -181,6 +142,12 @@ func Test_CRD_Installer_Idempotent(t *testing.T) {
 		t.Fatalf("failed to delete operator pod %s: %v", podName, err)
 	}
 	Logger.Infof("deleted operator pod %s, waiting for replacement to be ready", podName)
+
+	// Wait for the deleted pod to disappear so it cannot satisfy the readiness check below.
+	w := waiter.New[*v1.Pod]().WithTimeout(3 * time.Minute).WithInterval(time.Second)
+	if err := waiter.WaitForResourceDeletion(ctx, w, podName, k8sclient.Getter[*v1.Pod](k8sClient, setup.OperatorNamespace)); err != nil {
+		t.Fatalf("operator pod %s was not deleted: %v", podName, err)
+	}
 
 	// Wait for a new, ready operator pod to appear.
 	if err := k8spods.NewPodManager(k8sClient, Logger).WaitForReadyInNamespace(ctx, setup.OperatorNamespace, 1, 3*time.Minute, 5*time.Second); err != nil {

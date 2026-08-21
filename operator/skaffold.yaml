@@ -79,6 +79,8 @@ profiles:
         path: /deploy/helm/releases/0/setValues
         value:
           replicaCount: 1
+          crdInstaller:
+            enabled: true
           config:
             scheduler:
               defaultProfileName: kai-scheduler
