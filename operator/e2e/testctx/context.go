@@ -42,7 +42,7 @@ const (
 	// DefaultPollTimeout is the timeout for most polling conditions
 	DefaultPollTimeout = 4 * time.Minute
 	// DefaultPollInterval is the interval for most polling conditions
-	DefaultPollInterval = 5 * time.Second
+	DefaultPollInterval = time.Second
 )
 
 // WorkloadConfig defines configuration for deploying and verifying a workload.

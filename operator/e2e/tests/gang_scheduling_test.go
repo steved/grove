@@ -632,6 +632,9 @@ func Test_GS8_GangSchedulingWithPCSGScalingMinReplicasAdvanced2(t *testing.T) {
 	if err := tc.WaitForReadyPods(3); err != nil {
 		t.Fatalf("Failed to wait for 3 scheduled pods to become ready: %v", err)
 	}
+	if err := tc.VerifyPodsArePendingWithUnschedulableEvents(false, 11); err != nil {
+		t.Fatalf("Failed to wait for remaining pods to be observed by the scheduler: %v", err)
+	}
 
 	Logger.Info("8. Uncordon 4 nodes and verify 4 more pods get scheduled")
 	fourNodesToUncordon := nodesToCordon[1:5]
