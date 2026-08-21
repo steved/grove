@@ -79,13 +79,14 @@ spec:
               scheme: HTTP
             initialDelaySeconds: 15
             timeoutSeconds: 5
+          {{- $readinessProbe := .Values.deployment.readinessProbe | default dict }}
           readinessProbe:
             httpGet:
               path: /readyz
               port: {{ required ".Values.config.server.healthProbe.port is required" .Values.config.server.healthProbes.port }}
               scheme: HTTP
-            initialDelaySeconds: {{ .Values.deployment.readinessProbe.initialDelaySeconds }}
-            periodSeconds: {{ .Values.deployment.readinessProbe.periodSeconds }}
+            initialDelaySeconds: {{ dig "initialDelaySeconds" 10 $readinessProbe }}
+            periodSeconds: {{ dig "periodSeconds" 10 $readinessProbe }}
             timeoutSeconds: 5
           {{- end }}
           {{- with .Values.resources }}
