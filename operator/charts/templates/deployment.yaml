@@ -84,7 +84,8 @@ spec:
               path: /readyz
               port: {{ required ".Values.config.server.healthProbe.port is required" .Values.config.server.healthProbes.port }}
               scheme: HTTP
-            initialDelaySeconds: 10
+            initialDelaySeconds: {{ .Values.deployment.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.deployment.readinessProbe.periodSeconds }}
             timeoutSeconds: 5
           {{- end }}
           {{- with .Values.resources }}

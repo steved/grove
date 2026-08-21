@@ -81,6 +81,10 @@ profiles:
           replicaCount: 1
           crdInstaller:
             enabled: true
+          deployment:
+            readinessProbe:
+              initialDelaySeconds: 1
+              periodSeconds: 1
           config:
             scheduler:
               defaultProfileName: kai-scheduler

@@ -140,6 +140,9 @@ deployment:
     app.kubernetes.io/component: operator-deployment
     app.kubernetes.io/name: grove-operator
     app.kubernetes.io/part-of: grove
+  readinessProbe:
+    initialDelaySeconds: 10
+    periodSeconds: 10
   env:
     - name: GROVE_INIT_CONTAINER_IMAGE
       value: grove-initc
