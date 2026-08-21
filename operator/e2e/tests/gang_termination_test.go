@@ -293,7 +293,6 @@ func Test_GT5_IndividualPCSGReplicaTermination(t *testing.T) {
 
 	Logger.Infof("4. Kill all 3 pods from %s — should breach only that PCSG replica", pcsg0Target)
 	_, cordoned := cordonAndKillPodsFromClique(ctx, t, tc, pcsg0Target, 3)
-	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 
 	Logger.Info("5. Verify only PCSG-0 was recreated; PCSG-1 and pc-a kept their UIDs")
 	verifyPCSGReplicaRecreatedOnly(t, tc, "0", pcsg0OriginalUIDs, pcsg1OriginalUIDs, pcAOriginalUIDs)
