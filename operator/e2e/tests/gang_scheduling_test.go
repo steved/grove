@@ -806,8 +806,7 @@ func Test_GS10_GangSchedulingWithPCSScalingMinReplicasAdvanced(t *testing.T) {
 		t.Fatalf("Failed to deploy workload: %v", err)
 	}
 	Logger.Info("3. Verify all workload pods are pending due to insufficient resources")
-	// Need to use a sleep here unfortunately, see: https://github.com/NVIDIA/grove/issues/226
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved()
 
 	Logger.Info("4. Set PCS resource replicas equal to 2, then verify 10 more newly created pods")
 	pcsName := "workload2"
@@ -817,7 +816,7 @@ func Test_GS10_GangSchedulingWithPCSScalingMinReplicasAdvanced(t *testing.T) {
 	tc.ScalePCSAndWait(pcsName, 2, expectedPodsAfterScaling, expectedPodsAfterScaling)
 
 	Logger.Info("5. Verify all 20 newly created pods are pending due to insufficient resources")
-	tc.VerifyAllPodsArePendingWithSleep()
+	tc.VerifyPendingPodsObserved()
 
 	Logger.Info("6. Uncordon 4 nodes and verify a total of 6 pods get scheduled")
 	fourNodesToUncordon := nodesToCordon[0:4]
