@@ -124,14 +124,15 @@ def _run_parallel(tasks: dict[str, Callable[[], None]]) -> None:
             console.print(outputs[name], end="")
 
 
-def _run_prepull(registry_port: int) -> None:
+def _run_prepull(registry_port: int, kai_version: str) -> None:
     """Pre-pull images to local registry in a single batch.
 
     Args:
         registry_port: Port for the local container registry.
+        kai_version: Kai Scheduler image version to mirror.
     """
     groups: list[tuple[list[str], str]] = [
-        (DEPENDENCIES["kai_scheduler"]["images"], DEPENDENCIES["kai_scheduler"]["version"]),
+        (DEPENDENCIES["kai_scheduler"]["images"], kai_version),
         (DEPENDENCIES["cert_manager"]["images"], DEPENDENCIES["cert_manager"]["version"]),
     ]
     busybox_images = dep_value("test_images", "busybox")
@@ -144,7 +145,7 @@ def _run_kai_install(cfg: SetupConfig, do_prepull: bool) -> None:
     """Populate the local registry, then install Kai from it when pre-pulling is enabled."""
     image_registry = None
     if do_prepull:
-        _run_prepull(cfg.cluster.registry_port)
+        _run_prepull(cfg.cluster.registry_port, cfg.scheduler.kai.version)
         _, pull_repo = resolve_registry_repos(cfg.cluster.registry_port)
         image_registry = f"{pull_repo}/ghcr.io/kai-scheduler/kai-scheduler"
     install_kai_scheduler(cfg.scheduler.kai, image_registry)
@@ -221,7 +222,9 @@ def run_setup(cfg: SetupConfig) -> None:
     if cfg.scheduler.kai.enabled:
         parallel_tasks["kai"] = lambda: _run_kai_install(cfg, do_prepull)
     elif do_prepull:
-        parallel_tasks["prepull"] = lambda: _run_prepull(cfg.cluster.registry_port)
+        parallel_tasks["prepull"] = lambda: _run_prepull(
+            cfg.cluster.registry_port, cfg.scheduler.kai.version
+        )
     if cfg.grove.enabled:
         parallel_tasks["grove"] = lambda: deploy_grove_operator(cfg.grove, cfg.cluster, operator_dir)
     if cfg.pyroscope.enabled:
