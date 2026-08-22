@@ -192,11 +192,11 @@ run-e2e-mnnvl-full: e2e-cluster-up
 	@$(MAKE) e2e-cluster-down
 
 # Create a real-node k3d cluster for e2e testing (no KWOK virtual nodes)
-# Uses 30 actual k3d worker containers with 150m memory each.
+# Uses 10 actual k3d worker containers with 150m memory each.
 # Delegates to e2e-cluster-up with worker/KWOK overrides.
-# Override defaults: make e2e-cluster-up-real E2E_CLUSTER__WORKER_NODES=10
+# Override defaults: make e2e-cluster-up-real E2E_CLUSTER__WORKER_NODES=12
 .PHONY: e2e-cluster-up-real
-e2e-cluster-up-real: export E2E_CLUSTER__WORKER_NODES = 30
+e2e-cluster-up-real: export E2E_CLUSTER__WORKER_NODES = 10
 e2e-cluster-up-real: export E2E_CLUSTER__WORKER_MEMORY = 150m
 e2e-cluster-up-real: export E2E_KWOK__NODES = 0
 e2e-cluster-up-real: e2e-cluster-up
@@ -212,7 +212,7 @@ run-e2e-real:
 	@cd e2e && go test -p=1 -count=1 -tags=e2e,e2ereal ./tests -v -timeout 45m -run '$(if $(TEST_PATTERN),$(TEST_PATTERN),^Test_SO)'
 
 # Full e2e test run on real k3d workers (no KWOK virtual nodes)
-# Creates a 30-node real cluster, runs tests, then cleans up on success or failure.
+# Creates a 10-node real cluster, runs tests, then cleans up on success or failure.
 # Usage: make run-e2e-real-full [TEST_PATTERN=<pattern>]
 # Examples:
 #   make run-e2e-real-full                          # Run all tests on real nodes
