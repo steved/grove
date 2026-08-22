@@ -44,6 +44,64 @@ var groveCRDNames = []string{
 	"podgangs.scheduler.grove.io",
 }
 
+func operatorPod(t *testing.T, ctx context.Context, k8sClient *k8sclient.Client) v1.Pod {
+	t.Helper()
+	var podList v1.PodList
+	if err := k8sClient.List(ctx, &podList, client.InNamespace(setup.OperatorNamespace), setup.OperatorPodLabels); err != nil {
+		t.Fatalf("failed to list operator pods: %v", err)
+	}
+	if len(podList.Items) == 0 {
+		t.Fatalf("no operator pods found in namespace %s", setup.OperatorNamespace)
+	}
+	return podList.Items[0]
+}
+
+func ensureCRDInstallerEnabled(t *testing.T, ctx context.Context, k8sClient *k8sclient.Client) {
+	t.Helper()
+	for _, container := range operatorPod(t, ctx, k8sClient).Spec.InitContainers {
+		if container.Name == "crd-installer" {
+			return
+		}
+	}
+
+	chartDir, err := setup.GetGroveChartDir()
+	if err != nil {
+		t.Fatalf("failed to get Grove chart directory: %v", err)
+	}
+	if err := setup.UpdateGroveConfiguration(ctx, k8sClient.RestConfig, chartDir, &setup.GroveConfig{InstallCRDs: true}, Logger); err != nil {
+		t.Fatalf("failed to enable crd-installer: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := setup.UpdateGroveConfiguration(ctx, k8sClient.RestConfig, chartDir, &setup.GroveConfig{InstallCRDs: false}, Logger); err != nil {
+			t.Fatalf("failed to restore disabled crd-installer: %v", err)
+		}
+	})
+}
+
+func requireCRDInstallerCompleted(t *testing.T, pod v1.Pod) {
+	t.Helper()
+	var crdInstallerStatus *v1.ContainerStatus
+	for i := range pod.Status.InitContainerStatuses {
+		if pod.Status.InitContainerStatuses[i].Name == "crd-installer" {
+			crdInstallerStatus = &pod.Status.InitContainerStatuses[i]
+			break
+		}
+	}
+
+	if crdInstallerStatus == nil {
+		t.Fatalf("crd-installer init container not found in pod %s; init containers present: %v",
+			pod.Name, k8spods.InitContainerNames(pod))
+	}
+	if crdInstallerStatus.State.Terminated == nil {
+		t.Fatalf("crd-installer init container in pod %s is not in Terminated state: %+v",
+			pod.Name, crdInstallerStatus.State)
+	}
+	if crdInstallerStatus.State.Terminated.ExitCode != 0 {
+		t.Errorf("crd-installer init container in pod %s exited with code %d (expected 0)",
+			pod.Name, crdInstallerStatus.State.Terminated.ExitCode)
+	}
+}
+
 // Test_CRD_Installer_AllCRDsExist verifies that all 6 Grove CRDs are present and
 // established in the cluster after the operator has been deployed.
 // This test does not require crdInstaller.enabled=true — CRDs are installed by the
@@ -90,35 +148,8 @@ func Test_CRD_Installer_InitContainerCompleted(t *testing.T) {
 	sharedCluster := setup.SharedCluster(Logger)
 	k8sClient := sharedCluster.GetClient()
 
-	var podList v1.PodList
-	if err := k8sClient.List(ctx, &podList, client.InNamespace(setup.OperatorNamespace), setup.OperatorPodLabels); err != nil {
-		t.Fatalf("failed to list operator pods: %v", err)
-	}
-	if len(podList.Items) == 0 {
-		t.Fatalf("no operator pods found in namespace %s", setup.OperatorNamespace)
-	}
-
-	pod := podList.Items[0]
-	var crdInstallerStatus *v1.ContainerStatus
-	for i := range pod.Status.InitContainerStatuses {
-		if pod.Status.InitContainerStatuses[i].Name == "crd-installer" {
-			crdInstallerStatus = &pod.Status.InitContainerStatuses[i]
-			break
-		}
-	}
-
-	if crdInstallerStatus == nil {
-		t.Fatalf("crd-installer init container not found in pod %s; init containers present: %v",
-			pod.Name, k8spods.InitContainerNames(pod))
-	}
-	if crdInstallerStatus.State.Terminated == nil {
-		t.Fatalf("crd-installer init container in pod %s is not in Terminated state: %+v",
-			pod.Name, crdInstallerStatus.State)
-	}
-	if crdInstallerStatus.State.Terminated.ExitCode != 0 {
-		t.Errorf("crd-installer init container in pod %s exited with code %d (expected 0)",
-			pod.Name, crdInstallerStatus.State.Terminated.ExitCode)
-	}
+	ensureCRDInstallerEnabled(t, ctx, k8sClient)
+	requireCRDInstallerCompleted(t, operatorPod(t, ctx, k8sClient))
 }
 
 // Test_CRD_Installer_Idempotent verifies that restarting the operator Pod (which re-runs
@@ -130,12 +161,8 @@ func Test_CRD_Installer_Idempotent(t *testing.T) {
 	sharedCluster := setup.SharedCluster(Logger)
 	k8sClient := sharedCluster.GetClient()
 
-	// Get the current operator pod name.
-	var podList v1.PodList
-	if err := k8sClient.List(ctx, &podList, client.InNamespace(setup.OperatorNamespace), setup.OperatorPodLabels); err != nil || len(podList.Items) == 0 {
-		t.Fatalf("failed to get operator pod: %v (count: %d)", err, len(podList.Items))
-	}
-	podName := podList.Items[0].Name
+	ensureCRDInstallerEnabled(t, ctx, k8sClient)
+	podName := operatorPod(t, ctx, k8sClient).Name
 
 	// Delete the pod to force a restart (Deployment will recreate it).
 	if err := k8sClient.Delete(ctx, &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: setup.OperatorNamespace}}); err != nil {
@@ -150,9 +177,10 @@ func Test_CRD_Installer_Idempotent(t *testing.T) {
 	}
 
 	// Wait for a new, ready operator pod to appear.
-	if err := k8spods.NewPodManager(k8sClient, Logger).WaitForReadyInNamespace(ctx, setup.OperatorNamespace, 1, 3*time.Minute, 5*time.Second); err != nil {
+	if err := k8spods.NewPodManager(k8sClient, Logger).WaitForReadyCount(ctx, setup.OperatorNamespace, setup.OperatorPodLabelSelector, 1, 3*time.Minute, 5*time.Second); err != nil {
 		t.Fatalf("operator pod did not become ready after restart: %v", err)
 	}
+	requireCRDInstallerCompleted(t, operatorPod(t, ctx, k8sClient))
 
 	// All 6 CRDs must still exist and be Established after the restart.
 	for _, crdName := range groveCRDNames {
