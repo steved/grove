@@ -14,7 +14,23 @@
 
 package constants
 
-import "time"
+import (
+	"os"
+	"time"
+)
+
+// ComponentSyncRetryInterval is the interval at which component synchronization is retried.
+var ComponentSyncRetryInterval = func() time.Duration {
+	value := os.Getenv("GROVE_COMPONENT_SYNC_RETRY_INTERVAL")
+	if value == "" {
+		return 5 * time.Second
+	}
+	interval, err := time.ParseDuration(value)
+	if err != nil {
+		panic(err)
+	}
+	return interval
+}()
 
 const (
 	// PodGangNameFileName is the name of the file that contains the PodGang name in which the pod is running.
@@ -25,8 +41,6 @@ const (
 	VolumeMountPathPodInfo = "/var/grove/pod-info"
 	// OperatorNamespaceFile is the file path at which the namespace file is mounted.
 	OperatorNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-	// ComponentSyncRetryInterval is a retry interval with which a reconcile request will be requeued.
-	ComponentSyncRetryInterval = 5 * time.Second
 	// PodCliqueStatusResyncInterval is how often a PodClique is re-reconciled after a successful
 	// status reconcile even without a watch event. A status field left stale by a lost update is
 	// recomputed from a fresh cache and corrected within this interval.

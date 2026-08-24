@@ -79,6 +79,8 @@ profiles:
         path: /deploy/helm/releases/0/setValues
         value:
           replicaCount: 1
+          deployment.env[1].name: GROVE_COMPONENT_SYNC_RETRY_INTERVAL
+          deployment.env[1].value: 1s
           crdInstaller:
             enabled: true
           deployment:
