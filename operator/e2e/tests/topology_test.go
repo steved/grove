@@ -790,9 +790,8 @@ func Test_TAS11_PCSGPlusPCLQNoParentConstraint(t *testing.T) {
 // 1. Deploy workload with replicas=10, minAvailable=3, PCSG host constraint, PCS block constraint
 // 2. 20 pods expected (only minAvailable=3 replicas × 2 pods from base PodGang + 7 scaled PodGangs × 2 pods)
 // 3. Verify each PCSG replica's pods on same host
-// 4. Verify all pods in same block (PCS constraint)
-// 5. Verify base PodGang KAI PodGroup contains minAvailable=3 replicas
-// 6. Verify 7 scaled PodGangs' KAI PodGroups (replicas 3-9)
+// 4. Verify base PodGang KAI PodGroup contains minAvailable=3 replicas
+// 5. Verify 7 scaled PodGangs' KAI PodGroups (replicas 3-9)
 func Test_TAS12_LargeScalingRatio(t *testing.T) {
 	ctx := context.Background()
 
@@ -823,12 +822,10 @@ func Test_TAS12_LargeScalingRatio(t *testing.T) {
 		t.Fatalf("Failed to verify PCSG replicas: %v", err)
 	}
 
-	Logger.Info("4. Verify all 20 pods in same block (PCS block constraint)")
-	if err := topologyVerifier.VerifyPodsInSameTopologyDomain(tc.Ctx, allPods, setup.TopologyLabelBlock); err != nil {
-		t.Fatalf("Failed to verify all pods in same block: %v", err)
-	}
+	// TODO: Restore the PCS-level placement assertion once KAI can enforce a topology constraint
+	// across independently scheduled PodGangs. See https://github.com/ai-dynamo/grove/issues/648.
 
-	Logger.Info("5. Verify base PodGang's KAI PodGroup (replicas 0-2)")
+	Logger.Info("4. Verify base PodGang's KAI PodGroup (replicas 0-2)")
 	podGroup := GetPodGroupOrFail(t, tc, podGroupVerifier, 0)
 
 	// Verify top-level TopologyConstraint (PCS level: block)
@@ -842,7 +839,7 @@ func Test_TAS12_LargeScalingRatio(t *testing.T) {
 		t.Fatalf("Failed to verify KAI PodGroup topology: %v", err)
 	}
 
-	Logger.Info("6. Verify scaled PodGangs' KAI PodGroups (replicas 3-9)")
+	Logger.Info("5. Verify scaled PodGangs' KAI PodGroups (replicas 3-9)")
 
 	// PCSG config: replicas=10, minAvailable=3
 	// The anchor PodGang contains replicas 0-2, scaled PodGangs contain replicas 3-9.
