@@ -659,12 +659,8 @@ func Test_RU16_RollingUpdateWithPCSGScaleInDuringUpdate(t *testing.T) {
 
 	// After scaling sg-x back to 2 replicas via PCS template (affects all PCS replicas):
 	// 2 PCS replicas x (2 pc-a + 2 sg-x x 4 pods) = 2 x 10 = 20 pods
-	pods, err := tc.ListPods()
-	if err != nil {
-		t.Fatalf("Failed to list pods: %v", err)
-	}
-	if len(pods.Items) != 20 {
-		t.Fatalf("Expected 20 pods, got %d", len(pods.Items))
+	if _, err := tc.WaitForPodCount(20); err != nil {
+		t.Fatalf("Failed to wait for pods to scale in: %v", err)
 	}
 	tracker.stop()
 
