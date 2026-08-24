@@ -299,7 +299,7 @@ func Test_TAS3_PCSOnlyConstraint(t *testing.T) {
 // Test_TAS4_PCSGOnlyConstraint tests constraint only at PCSG level with no PCS/PCLQ constraints
 // 1. Deploy workload with constraint only at PCSG level (pack.required: rack)
 // 2. PCS and PCLQs have NO explicit constraints
-// 3. Verify PCSG worker pods (2 total) respect rack constraint
+// 3. Verify each PCSG replica independently respects the rack constraint
 // 4. Router pods (2 standalone) are unconstrained
 func Test_TAS4_PCSGOnlyConstraint(t *testing.T) {
 	ctx := context.Background()
@@ -325,9 +325,10 @@ func Test_TAS4_PCSGOnlyConstraint(t *testing.T) {
 		t.Fatalf("Setup failed: %v", err)
 	}
 
-	Logger.Info("3. Verify PCSG worker pods (2 total, 1 per replica) in same rack")
-	if err := topologyVerifier.VerifyLabeledPodsInTopologyDomain(tc.Ctx, allPods, nameutils.LabelPodCliqueScalingGroup, "tas-sl-pcsg-only-0-workers", 2, setup.TopologyLabelRack); err != nil {
-		t.Fatalf("Failed to verify worker pods in same rack: %v", err)
+	Logger.Info("3. Verify each PCSG replica independently respects the rack constraint")
+	if err := topologyVerifier.VerifyPCSGReplicasInTopologyDomain(tc.Ctx, allPods,
+		"tas-sl-pcsg-only-0-workers", 2, 1, setup.TopologyLabelRack); err != nil {
+		t.Fatalf("Failed to verify PCSG replica rack placement: %v", err)
 	}
 
 	Logger.Info("4. Verify KAI PodGroup has correct SubGroups (PCSG-only constraint)")
