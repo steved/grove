@@ -21,9 +21,12 @@ import (
 	"fmt"
 	"time"
 
+	apicommon "github.com/ai-dynamo/grove/operator/api/common"
+	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
 	"github.com/ai-dynamo/grove/operator/e2e/log"
 	"github.com/ai-dynamo/grove/operator/e2e/waiter"
 	kubeutils "github.com/ai-dynamo/grove/operator/internal/utils/kubernetes"
+	groveschedulerv1alpha1 "github.com/ai-dynamo/grove/scheduler/api/core/v1alpha1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -152,11 +155,23 @@ func (pm *PodManager) WaitForAllPending(ctx context.Context, namespace, labelSel
 }
 
 // WaitForAllPendingObserved waits until all pods are pending and either
-// scheduling-gated or observed as unschedulable by the scheduler.
+// intentionally dependency-gated or observed as unschedulable by the scheduler.
 func (pm *PodManager) WaitForAllPendingObserved(ctx context.Context, namespace, labelSelector string, timeout, interval time.Duration) error {
+	var podGangList groveschedulerv1alpha1.PodGangList
+	if err := pm.cl.List(ctx, &podGangList, client.InNamespace(namespace)); err != nil {
+		return fmt.Errorf("failed to list PodGangs in namespace %s: %w", namespace, err)
+	}
+	scaledPodGangs := make(map[string]struct{})
+	for i := range podGangList.Items {
+		role := podGangList.Items[i].Labels[apicommon.LabelPodGangRole]
+		if role == string(grovecorev1alpha1.PodGangEntryRoleTail) || role == string(grovecorev1alpha1.PodGangEntryRoleScaleOut) {
+			scaledPodGangs[podGangList.Items[i].Name] = struct{}{}
+		}
+	}
+
 	fetchPods := pm.FetchFunc(ctx, namespace, labelSelector)
 	w := waiter.New[*v1.PodList]().WithTimeout(timeout).WithInterval(interval)
-	_, err := w.WaitFor(ctx, fetchPods, AllPendingObserved())
+	_, err := w.WaitFor(ctx, fetchPods, AllPendingObserved(scaledPodGangs))
 	return err
 }
 

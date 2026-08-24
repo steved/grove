@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 
+	apicommon "github.com/ai-dynamo/grove/operator/api/common"
 	"github.com/ai-dynamo/grove/operator/e2e/waiter"
 	kubeutils "github.com/ai-dynamo/grove/operator/internal/utils/kubernetes"
 	v1 "k8s.io/api/core/v1"
@@ -88,8 +89,9 @@ func AllPending() waiter.Predicate[*v1.PodList] {
 }
 
 // AllPendingObserved returns a Predicate that checks all pods are pending and
-// either scheduling-gated or observed as unschedulable by the scheduler.
-func AllPendingObserved() waiter.Predicate[*v1.PodList] {
+// either intentionally dependency-gated or observed as unschedulable by the
+// scheduler.
+func AllPendingObserved(scaledPodGangs map[string]struct{}) waiter.Predicate[*v1.PodList] {
 	return func(podList *v1.PodList) bool {
 		if len(podList.Items) == 0 {
 			return false
@@ -99,7 +101,7 @@ func AllPendingObserved() waiter.Predicate[*v1.PodList] {
 			if pod.Status.Phase != v1.PodPending {
 				return false
 			}
-			if len(pod.Spec.SchedulingGates) > 0 {
+			if _, scaledPodGang := scaledPodGangs[pod.Labels[apicommon.LabelPodGang]]; scaledPodGang && len(pod.Spec.SchedulingGates) > 0 {
 				continue
 			}
 			observed := false
