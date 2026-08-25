@@ -96,6 +96,7 @@ func runFullReplicasScenario(t *testing.T, workloadName, yamlFile, targetCliqueF
 		t.Fatalf("no ready pod found for clique %s", targetCliqueFQN)
 	}
 	originalUIDs := capturePodUIDs(pods)
+	originalPCLQUIDs := capturePodCliqueUIDs(t, tc)
 
 	if err := tc.CordonNode(target.Spec.NodeName); err != nil {
 		t.Fatalf("Failed to cordon node %s: %v", target.Spec.NodeName, err)
@@ -107,8 +108,8 @@ func runFullReplicasScenario(t *testing.T, workloadName, yamlFile, targetCliqueF
 	Logger.Infof("4. Wait %s (terminationDelay + grace) for gang termination to fire", terminationDelayInWorkloadYAML+gangTerminationGrace)
 	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 
-	Logger.Info("5. Verify all PCS-replica pods got recreated (zero original UIDs survive)")
-	verifyAllPodsRecreated(t, tc, originalUIDs, totalWLPods)
+	Logger.Info("5. Verify all PCS-replica PodCliques and pods got recreated (zero original UIDs survive)")
+	verifyAllPodsRecreated(t, tc, originalUIDs, originalPCLQUIDs, totalWLPods)
 
 	Logger.Info("6. Uncordon the node and verify the recycled gang actually recovers to fully ready")
 	uncordonAndVerifyRecovery(t, tc, []string{target.Spec.NodeName}, totalWLPods)
@@ -154,11 +155,12 @@ func Test_GT3_GangTerminationMinReplicasPCSOwned(t *testing.T) {
 		t.Fatalf("Failed to list pods: %v", err)
 	}
 	originalUIDs := capturePodUIDs(pods)
+	originalPCLQUIDs := capturePodCliqueUIDs(t, tc)
 	_, cordonedSecond := cordonAndKillPodsFromClique(ctx, t, tc, targetClique, 1)
 	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
 
-	Logger.Info("5. Verify all PCS-replica pods got recreated")
-	verifyAllPodsRecreated(t, tc, originalUIDs, totalWLPods)
+	Logger.Info("5. Verify all PCS-replica PodCliques and pods got recreated")
+	verifyAllPodsRecreated(t, tc, originalUIDs, originalPCLQUIDs, totalWLPods)
 
 	Logger.Info("6. Uncordon the killed pods' nodes and verify the recycled gang recovers to fully ready")
 	uncordonAndVerifyRecovery(t, tc, append(cordonedFirst, cordonedSecond...), totalWLPods)
@@ -242,9 +244,10 @@ func Test_GT4_GangTerminationMinReplicasPCSGOwned(t *testing.T) {
 		t.Fatalf("Failed to list pods: %v", err)
 	}
 	finalOriginalUIDs := capturePodUIDs(pods)
+	finalOriginalPCLQUIDs := capturePodCliqueUIDs(t, tc)
 	_, cordonedD := cordonAndKillPodsFromClique(ctx, t, tc, pcsg1Target, 2)
 	time.Sleep(terminationDelayInWorkloadYAML + gangTerminationGrace)
-	verifyAllPodsRecreated(t, tc, finalOriginalUIDs, totalWLPods)
+	verifyAllPodsRecreated(t, tc, finalOriginalUIDs, finalOriginalPCLQUIDs, totalWLPods)
 
 	Logger.Info("7. Uncordon all nodes cordoned by this test and verify the recycled gang recovers to fully ready")
 	allCordoned := append(append(append(cordonedA, cordonedB...), cordonedC...), cordonedD...)
@@ -460,6 +463,23 @@ func capturePodUIDs(pods *corev1.PodList) map[types.UID]struct{} {
 	return out
 }
 
+// capturePodCliqueUIDs snapshots every PodClique UID managed by the workload.
+func capturePodCliqueUIDs(t *testing.T, tc *testctx.TestContext) map[types.UID]struct{} {
+	t.Helper()
+	var pclqs grovecorev1alpha1.PodCliqueList
+	if err := tc.Client.List(tc.Ctx, &pclqs,
+		client.InNamespace(tc.Namespace),
+		client.MatchingLabels{apicommon.LabelPartOfKey: tc.Workload.Name},
+	); err != nil {
+		t.Fatalf("Failed to list PodCliques: %v", err)
+	}
+	out := make(map[types.UID]struct{}, len(pclqs.Items))
+	for _, pclq := range pclqs.Items {
+		out[pclq.UID] = struct{}{}
+	}
+	return out
+}
+
 // capturePodUIDsForClique returns UIDs of pods belonging to a specific PodClique.
 func capturePodUIDsForClique(pods *corev1.PodList, cliqueFQN string) map[types.UID]struct{} {
 	out := make(map[types.UID]struct{})
@@ -534,16 +554,17 @@ func dumpPodsByClique(t *testing.T, pods *corev1.PodList) {
 	}
 }
 
-// verifyAllPodsRecreated polls until every UID in originalUIDs is absent from
-// the workload's current pods AND the workload has exactly expectedPods
-// non-terminating pods. Strong signal that PCS-level gang termination fired.
+// verifyAllPodsRecreated polls until every original PodClique and pod UID is
+// absent and the workload has returned to its original object counts. PodClique
+// turnover proves that Grove's PCS-level gang-termination deletion fired;
+// scheduler-driven pod churn alone cannot satisfy the check.
 //
 // Readiness is deliberately NOT asserted here: the harness runs with exactly
 // totalWLPods schedulable nodes (PrepareTest cordons the rest) and the kill
 // steps cordon the freed nodes, so the replacement gang CANNOT fully schedule
 // while the test-cordoned nodes are still cordoned. Callers assert actual
 // recovery afterwards with uncordonAndVerifyRecovery.
-func verifyAllPodsRecreated(t *testing.T, tc *testctx.TestContext, originalUIDs map[types.UID]struct{}, expectedPods int) {
+func verifyAllPodsRecreated(t *testing.T, tc *testctx.TestContext, originalPodUIDs, originalPCLQUIDs map[types.UID]struct{}, expectedPods int) {
 	t.Helper()
 	deadline := time.Now().Add(tc.Timeout)
 	var lastErr string
@@ -552,20 +573,22 @@ func verifyAllPodsRecreated(t *testing.T, tc *testctx.TestContext, originalUIDs 
 		if err != nil {
 			t.Fatalf("Failed to list pods during recreate check: %v", err)
 		}
-		survivors, nonTerminating := 0, 0
+		podSurvivors, nonTerminating := 0, 0
 		for _, p := range pods.Items {
-			if _, ok := originalUIDs[p.UID]; ok {
-				survivors++
+			if _, ok := originalPodUIDs[p.UID]; ok {
+				podSurvivors++
 			}
 			if p.DeletionTimestamp == nil {
 				nonTerminating++
 			}
 		}
-		if survivors == 0 && nonTerminating == expectedPods {
-			Logger.Infof("Gang termination confirmed: 0/%d original UIDs survive, %d non-terminating pods", len(originalUIDs), nonTerminating)
+		currentPCLQUIDs := capturePodCliqueUIDs(t, tc)
+		pclqSurvivors := overlap(currentPCLQUIDs, originalPCLQUIDs)
+		if podSurvivors == 0 && nonTerminating == expectedPods && pclqSurvivors == 0 && len(currentPCLQUIDs) == len(originalPCLQUIDs) {
+			Logger.Infof("Gang termination confirmed: 0/%d original Pod UIDs and 0/%d original PodClique UIDs survive", len(originalPodUIDs), len(originalPCLQUIDs))
 			return
 		}
-		lastErr = fmt.Sprintf("survivors=%d non-terminating=%d (want survivors=0 non-terminating=%d)", survivors, nonTerminating, expectedPods)
+		lastErr = fmt.Sprintf("pod-survivors=%d non-terminating-pods=%d (want 0/%d); pclq-survivors=%d current-pclqs=%d (want 0/%d)", podSurvivors, nonTerminating, expectedPods, pclqSurvivors, len(currentPCLQUIDs), len(originalPCLQUIDs))
 		time.Sleep(tc.Interval)
 	}
 	t.Fatalf("Gang termination did not occur within %s — final state: %s", tc.Timeout, lastErr)
