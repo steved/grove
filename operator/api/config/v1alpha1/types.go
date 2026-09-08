@@ -114,6 +114,14 @@ type KubeSchedulerConfig struct {
 	GangScheduling bool `json:"gangScheduling,omitempty"`
 }
 
+// LPXSchedulerConfiguration defines the configuration for the lpx-scheduler backend.
+type LPXSchedulerConfiguration struct {
+	// FallbackProfileName is the scheduler profile used to schedule pods that do not
+	// request LPX resources. It must name another profile in scheduler.profiles.
+	// +optional
+	FallbackProfileName string `json:"fallbackProfileName,omitempty"`
+}
+
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
 // OperatorConfiguration defines the configuration for the Grove operator.

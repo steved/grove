@@ -81,7 +81,7 @@ func (b *schedulerBackend) Name() string {
 
 // Init registers the KAI API types into b.scheme and must be called before
 // that scheme is used to serialize or deserialize KAI objects.
-func (b *schedulerBackend) Init(_ client.Client) error {
+func (b *schedulerBackend) Init(_ client.Client, _ map[string]scheduler.Backend) error {
 	if err := kaitopologyv1alpha1.AddToScheme(b.scheme); err != nil {
 		return err
 	}

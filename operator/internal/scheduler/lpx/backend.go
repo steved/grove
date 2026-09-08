@@ -16,6 +16,7 @@ package lpx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -32,6 +33,7 @@ import (
 type schedulerBackend struct {
 	client          client.Client
 	name            string
+	profile         configv1alpha1.SchedulerProfile
 	fallbackBackend scheduler.Backend
 }
 
@@ -47,11 +49,11 @@ var (
 )
 
 // New creates an LPX scheduler backend.
-func New(cl client.Client, profile configv1alpha1.SchedulerProfile, fallbackBackend scheduler.Backend) scheduler.Backend {
+func New(cl client.Client, profile configv1alpha1.SchedulerProfile) scheduler.Backend {
 	return &schedulerBackend{
-		client:          cl,
-		name:            string(profile.Name),
-		fallbackBackend: fallbackBackend,
+		client:  cl,
+		name:    string(profile.Name),
+		profile: profile,
 	}
 }
 
@@ -60,10 +62,29 @@ func (b *schedulerBackend) Name() string {
 	return b.name
 }
 
-// Init defers to the fallback backend.
-func (b *schedulerBackend) Init(directClient client.Client) error {
-	if b.fallbackBackend != nil {
-		return b.fallbackBackend.Init(directClient)
+// Init constructs the configured fallback backend.
+func (b *schedulerBackend) Init(_ client.Client, backends map[string]scheduler.Backend) error {
+	var config configv1alpha1.LPXSchedulerConfiguration
+
+	if b.profile.Config == nil {
+		return nil
+	}
+
+	if err := json.Unmarshal(b.profile.Config.Raw, &config); err != nil {
+		return fmt.Errorf("%s: invalid config: %w", b.name, err)
+	}
+
+	if config.FallbackProfileName != "" {
+		if config.FallbackProfileName != string(configv1alpha1.SchedulerNameKai) {
+			return fmt.Errorf("%s: unsupported fallback profile %q: must be %q", b.name, config.FallbackProfileName, string(configv1alpha1.SchedulerNameKai))
+		}
+
+		backend, ok := backends[config.FallbackProfileName]
+		if !ok {
+			return fmt.Errorf("%s: unknown fallback profile %q", b.name, config.FallbackProfileName)
+		}
+
+		b.fallbackBackend = backend
 	}
 
 	return nil

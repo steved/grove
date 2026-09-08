@@ -98,11 +98,7 @@ func TestBuildResourceWithLPXBackend(t *testing.T) {
 	require.NoError(t, grovecorev1alpha1.AddToScheme(scheme))
 	registry := &testutils.FakeSchedulerRegistry{
 		Backends: map[string]scheduler.Backend{
-			string(configv1alpha1.SchedulerNameLPX): lpx.New(
-				nil,
-				configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX},
-				testutils.NewFakeSchedulerBackend(string(configv1alpha1.SchedulerNameKai)),
-			),
+			string(configv1alpha1.SchedulerNameLPX): lpx.New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX}),
 		},
 		DefaultBackend: string(configv1alpha1.SchedulerNameLPX),
 	}

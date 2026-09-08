@@ -16,11 +16,13 @@ package lpx
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/ai-dynamo/grove/operator/api/common/constants"
 	configv1alpha1 "github.com/ai-dynamo/grove/operator/api/config/v1alpha1"
 	grovecorev1alpha1 "github.com/ai-dynamo/grove/operator/api/core/v1alpha1"
+	"github.com/ai-dynamo/grove/operator/internal/scheduler"
 	"github.com/ai-dynamo/grove/operator/internal/scheduler/kai"
 	testutils "github.com/ai-dynamo/grove/operator/test/utils"
 	schedulertest "github.com/ai-dynamo/grove/operator/test/utils/scheduler"
@@ -31,16 +33,66 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-func TestBackendPreparePod(t *testing.T) {
-	backend := New(nil,
-		configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX},
-		testutils.NewFakeSchedulerBackend(string(configv1alpha1.SchedulerNameKai)),
+var lpxSchedulerProfileConfig runtime.RawExtension
+
+func init() {
+	var (
+		lpxSchedulerConfig = configv1alpha1.LPXSchedulerConfiguration{FallbackProfileName: string(configv1alpha1.SchedulerNameKai)}
+		err                error
 	)
+
+	lpxSchedulerProfileConfig.Raw, err = json.Marshal(lpxSchedulerConfig)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func TestBackendInit(t *testing.T) {
+	t.Run("no fallback profile", func(t *testing.T) {
+		backend := New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX})
+		require.NoError(t, backend.Init(nil, nil))
+	})
+
+	t.Run("empty fallback profile name", func(t *testing.T) {
+		var (
+			config runtime.RawExtension
+			err    error
+		)
+		config.Raw, err = json.Marshal(configv1alpha1.LPXSchedulerConfiguration{})
+		require.NoError(t, err)
+
+		backend := New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &config})
+		require.NoError(t, backend.Init(nil, nil))
+	})
+
+	t.Run("unsupported fallback profile name", func(t *testing.T) {
+		var (
+			config      runtime.RawExtension
+			err         error
+			profileName = string(configv1alpha1.SchedulerNameVolcano)
+		)
+		config.Raw, err = json.Marshal(configv1alpha1.LPXSchedulerConfiguration{FallbackProfileName: profileName})
+		require.NoError(t, err)
+
+		backend := New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &config})
+		require.Error(t, backend.Init(nil, map[string]scheduler.Backend{profileName: testutils.NewFakeSchedulerBackend(profileName)}))
+	})
+
+	t.Run("missing fallback profile", func(t *testing.T) {
+		backend := New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &lpxSchedulerProfileConfig})
+		require.Error(t, backend.Init(nil, nil))
+	})
+}
+
+func TestBackendPreparePod(t *testing.T) {
+	backend := New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &lpxSchedulerProfileConfig})
+	require.NoError(t, backend.Init(nil, map[string]scheduler.Backend{string(configv1alpha1.SchedulerNameKai): testutils.NewFakeSchedulerBackend(string(configv1alpha1.SchedulerNameKai))}))
 	pod := testutils.NewPodWithBuilderWithDefaultSpec("test-pod", "default").
 		WithSchedulerName("default-scheduler").
 		Build()
@@ -75,9 +127,11 @@ func TestBackendSyncPodGangLPXOnly(t *testing.T) {
 
 	cl := testutils.NewTestClientBuilder().WithScheme(scheme).WithObjects(pcs, lpxPodClique, podGang).Build()
 
-	fallback := kai.New(cl, scheme, nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-	backend := New(cl, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX}, fallback)
-	require.NoError(t, backend.Init(cl))
+	fallbackBackend := kai.New(cl, scheme, nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
+	backend := New(cl, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &lpxSchedulerProfileConfig})
+
+	require.NoError(t, fallbackBackend.Init(cl, nil))
+	require.NoError(t, backend.Init(cl, map[string]scheduler.Backend{string(configv1alpha1.SchedulerNameKai): fallbackBackend}))
 
 	require.NoError(t, backend.SyncPodGang(t.Context(), podGang))
 
@@ -112,9 +166,11 @@ func TestBackendSyncPodGangMixedWorkload(t *testing.T) {
 
 	cl := testutils.NewTestClientBuilder().WithScheme(scheme).WithObjects(pcs, lpxPodClique, kaiPodClique, podGang).Build()
 
-	fallback := kai.New(cl, scheme, nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-	backend := New(cl, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX}, fallback)
-	require.NoError(t, backend.Init(cl))
+	fallbackBackend := kai.New(cl, scheme, nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
+	backend := New(cl, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &lpxSchedulerProfileConfig})
+
+	require.NoError(t, fallbackBackend.Init(cl, nil))
+	require.NoError(t, backend.Init(cl, map[string]scheduler.Backend{string(configv1alpha1.SchedulerNameKai): fallbackBackend}))
 
 	require.NoError(t, backend.SyncPodGang(t.Context(), podGang))
 
@@ -185,8 +241,14 @@ func TestBackendValidatePodCliqueSet(t *testing.T) {
 		},
 	}
 
-	fallback := kai.New(nil, nil, nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-	backend := New(nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX}, fallback)
+	scheme := schedulertest.NewKAIScheme(t)
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, groveschedulerv1alpha1.AddToScheme(scheme))
+
+	cl := testutils.NewTestClientBuilder().WithScheme(scheme).Build()
+
+	backend := New(cl, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameLPX, Config: &lpxSchedulerProfileConfig})
+	require.NoError(t, backend.Init(cl, map[string]scheduler.Backend{"kai-scheduler": kai.New(cl, scheme, nil, configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})}))
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

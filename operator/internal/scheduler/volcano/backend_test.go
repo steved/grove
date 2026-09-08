@@ -89,7 +89,7 @@ func TestBackend_Init(t *testing.T) {
 			profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameVolcano}
 			b := New(cl, cl.Scheme(), recorder, profile)
 
-			err := b.Init(cl)
+			err := b.Init(cl, nil)
 			if tt.wantErr != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErr)

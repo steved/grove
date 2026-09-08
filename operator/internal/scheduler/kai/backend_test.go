@@ -130,7 +130,7 @@ func TestBackend_SyncPodGang_CreateAndUpdate(t *testing.T) {
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai}
 	b := New(cl, cl.Scheme(), recorder, profile)
-	require.NoError(t, b.Init(cl))
+	require.NoError(t, b.Init(cl, nil))
 
 	ctx := context.Background()
 	require.NoError(t, b.SyncPodGang(ctx, podGang))
@@ -204,7 +204,7 @@ func TestBackend_SyncPodGang_SkipsEmptyTopologyConstraintGroups(t *testing.T) {
 
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, podGang).Build()
 	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-	require.NoError(t, b.Init(cl))
+	require.NoError(t, b.Init(cl, nil))
 
 	ctx := context.Background()
 	require.NoError(t, b.SyncPodGang(ctx, podGang))
@@ -232,7 +232,7 @@ func TestBackend_SyncPodGangSetsOwnerReferenceAndSkipAnnotation(t *testing.T) {
 	recorder := record.NewFakeRecorder(10)
 	profile := configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai}
 	b := New(cl, cl.Scheme(), recorder, profile)
-	require.NoError(t, b.Init(cl))
+	require.NoError(t, b.Init(cl, nil))
 
 	ctx := context.Background()
 	require.NoError(t, b.SyncPodGang(ctx, podGang))
@@ -263,7 +263,7 @@ func TestBackend_SyncPodGang_UsesUniquePodCliqueTemplateQueue(t *testing.T) {
 
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, podGang).Build()
 	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-	require.NoError(t, b.Init(cl))
+	require.NoError(t, b.Init(cl, nil))
 
 	ctx := context.Background()
 	require.NoError(t, b.SyncPodGang(ctx, podGang))
@@ -431,7 +431,7 @@ func TestBackend_SyncPodGang_QueueResolutionFailuresDoNotCreatePodGroup(t *testi
 
 			cl := testutils.NewTestClientBuilder().WithObjects(objects...).Build()
 			b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-			require.NoError(t, b.Init(cl))
+			require.NoError(t, b.Init(cl, nil))
 
 			err := b.SyncPodGang(context.Background(), podGang)
 			require.ErrorContains(t, err, tt.wantErrSubstr)
@@ -459,7 +459,7 @@ func TestBackend_SyncPodGang_RemovesPodGroupOnEmptyInput(t *testing.T) {
 
 	cl := testutils.NewTestClientBuilder().WithObjects(pcs, podGang).Build()
 	b := New(cl, cl.Scheme(), record.NewFakeRecorder(10), configv1alpha1.SchedulerProfile{Name: configv1alpha1.SchedulerNameKai})
-	require.NoError(t, b.Init(cl))
+	require.NoError(t, b.Init(cl, nil))
 
 	require.NoError(t, b.SyncPodGang(t.Context(), podGang))
 
